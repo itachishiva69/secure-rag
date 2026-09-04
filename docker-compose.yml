@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: secure-rag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: secure_rag
+      POSTGRES_USER: secure_rag
+      POSTGRES_PASSWORD: secure_rag_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secure_rag -d secure_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: secure-rag-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_data:
+  qdrant_data:
