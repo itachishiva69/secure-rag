@@ -29,6 +29,17 @@ def ingest_document(
     db.commit()
 
     try:
+        # Remove any previous vectors before processing.
+        #
+        # This is important when:
+        # - the document is being re-indexed;
+        # - a previous attempt partially indexed vectors;
+        # - the previous version of the document is still
+        #   present in Qdrant.
+        delete_document_vectors(
+            document.id
+        )
+
         text = extract_text(
             document.storage_path
         )
@@ -59,11 +70,6 @@ def ingest_document(
 
         ensure_collection()
 
-        # Remove old vectors before replacing them.
-        delete_document_vectors(
-            document.id
-        )
-
         indexed_count = index_chunks(
             document_id=document.id,
             filename=document.filename,
@@ -71,13 +77,25 @@ def ingest_document(
             department_ids=department_ids,
         )
 
+        if indexed_count != len(chunks):
+            raise RuntimeError(
+                "Indexed chunk count does not match "
+                "the generated chunk count"
+            )
+
         document.status = DocumentStatus.INDEXED
         db.commit()
 
         return indexed_count
 
     except Exception:
-        document.status = DocumentStatus.FAILED
-        db.commit()
+        # Never leave vectors from a failed ingestion attempt.
+        try:
+            delete_document_vectors(
+                document.id
+            )
+        finally:
+            document.status = DocumentStatus.FAILED
+            db.commit()
 
         raise
