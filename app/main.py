@@ -16,6 +16,9 @@ from app.api.documents import (
     router as documents_router,
 )
 from app.api.query import router as query_router
+from app.api.users import (
+    router as users_router,
+)
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.request_context import (
@@ -112,6 +115,7 @@ app.include_router(auth_router)
 app.include_router(departments_router)
 app.include_router(documents_router)
 app.include_router(query_router)
+app.include_router(users_router)
 
 
 @app.get("/health")
@@ -128,9 +132,7 @@ def qdrant_health():
         url=settings.qdrant_url
     )
 
-    collections = (
-        client.get_collections()
-    )
+    collections = client.get_collections()
 
     return {
         "status": "ok",
