@@ -4,10 +4,10 @@ from fastapi.testclient import TestClient
 from qdrant_client.models import ScoredPoint
 
 from app.api.dependencies import get_current_user
+from app.api.query import get_query_reranker
 from app.db.database import get_db
 from app.main import app
-from app.models.enums import UserRole
-from app.rag.reranker import RerankedChunk, get_reranker
+from app.rag.reranker import RerankedChunk
 
 from tests.integration.test_query_api import (
     create_test_data,
@@ -110,8 +110,6 @@ def test_query_uses_reranked_order_for_context_and_sources(
             captured["reranker_chunks"] = chunks
             captured["reranker_limit"] = limit
 
-            # Simulate the reranker changing the original
-            # Qdrant order from A, B, C to C, A.
             return [
                 RerankedChunk(
                     chunk=chunks[2],
@@ -154,7 +152,7 @@ def test_query_uses_reranked_order_for_context_and_sources(
         lambda: finance_user
     )
 
-    app.dependency_overrides[get_reranker] = (
+    app.dependency_overrides[get_query_reranker] = (
         lambda: spy_reranker
     )
 
@@ -177,11 +175,8 @@ def test_query_uses_reranked_order_for_context_and_sources(
             "Answer based on reranked context."
         )
 
-        # Qdrant provides the larger candidate set.
         assert captured["search_limit"] == 10
 
-        # The reranker receives the same authorized
-        # candidates returned by retrieval.
         assert captured["reranker_query"] == (
             "What is the finance policy?"
         )
@@ -191,28 +186,21 @@ def test_query_uses_reranked_order_for_context_and_sources(
             for chunk in captured["reranker_chunks"]
         ] == [0, 1, 2]
 
-        # The endpoint asks retrieval for the requested
-        # final result count.
         assert captured["reranker_limit"] == 2
 
-        # The LLM receives the reranked order:
-        # chunk 2 first, then chunk 0.
         context_text = captured["llm_context"].text
 
+        assert context_text.index(
+            "Original ranking chunk C."
+        ) < context_text.index(
+            "Original ranking chunk A."
+        )
+
         assert (
-            context_text.index(
-                "Original ranking chunk C."
-            )
-            < context_text.index(
-                "Original ranking chunk A."
-            )
+            "Original ranking chunk B."
+            not in context_text
         )
 
-        assert "Original ranking chunk B." not in (
-            context_text
-        )
-
-        # API sources must preserve that same reranked order.
         assert body["sources"] == [
             {
                 "document_id": finance_document.id,

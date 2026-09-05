@@ -9,6 +9,10 @@ from app.schemas.query import RetrievedChunk
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
 
 
+class RerankerError(Exception):
+    """Raised when reranking cannot be completed."""
+
+
 @dataclass(frozen=True)
 class RerankedChunk:
     chunk: RetrievedChunk
@@ -20,10 +24,15 @@ class Reranker:
         self,
         model_name: str = RERANKER_MODEL,
     ):
-        self.model = CrossEncoder(
-            model_name,
-            device="cpu",
-        )
+        try:
+            self.model = CrossEncoder(
+                model_name,
+                device="cpu",
+            )
+        except Exception as exc:
+            raise RerankerError(
+                "Reranker model could not be loaded"
+            ) from exc
 
     def rerank(
         self,
@@ -53,10 +62,21 @@ class Reranker:
             for chunk in chunks
         ]
 
-        scores = self.model.predict(
-            pairs,
-            show_progress_bar=False,
-        )
+        try:
+            scores = self.model.predict(
+                pairs,
+                show_progress_bar=False,
+            )
+        except Exception as exc:
+            raise RerankerError(
+                "Reranker inference failed"
+            ) from exc
+
+        if len(scores) != len(chunks):
+            raise RerankerError(
+                "Reranker returned an unexpected "
+                "number of scores"
+            )
 
         ranked = [
             RerankedChunk(

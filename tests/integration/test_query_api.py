@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 from qdrant_client.models import ScoredPoint
 
 from app.api.dependencies import get_current_user
+from app.api.query import get_query_reranker
 from app.db.database import get_db
 from app.main import app
 from app.models import Department, Document, User
@@ -169,6 +170,10 @@ def test_finance_user_retrieval_only_returns_finance_chunks(
         lambda: finance_user
     )
 
+    app.dependency_overrides[get_query_reranker] = (
+        lambda: None
+    )
+
     client = TestClient(app)
 
     try:
@@ -299,6 +304,10 @@ def test_user_with_no_department_gets_no_results(
         lambda: user
     )
 
+    app.dependency_overrides[get_query_reranker] = (
+        lambda: None
+    )
+
     client = TestClient(app)
 
     try:
@@ -412,6 +421,10 @@ def test_llm_provider_failure_returns_502(
 
     app.dependency_overrides[get_current_user] = (
         lambda: finance_user
+    )
+
+    app.dependency_overrides[get_query_reranker] = (
+        lambda: None
     )
 
     client = TestClient(app)

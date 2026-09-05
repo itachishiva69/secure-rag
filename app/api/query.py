@@ -3,7 +3,11 @@ from pydantic import ValidationError
 
 from app.api.dependencies import get_current_user
 from app.models import User
-from app.rag.reranker import Reranker, get_reranker
+from app.rag.reranker import (
+    Reranker,
+    RerankerError,
+    get_reranker,
+)
 from app.schemas.query import (
     QueryResponse,
     QuerySource,
@@ -36,6 +40,19 @@ def parse_retrieved_chunk(
         return None
 
 
+def get_query_reranker() -> Reranker:
+    try:
+        return get_reranker()
+    except RerankerError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "The document reranking service "
+                "is temporarily unavailable."
+            ),
+        ) from exc
+
+
 @router.post(
     "/",
     response_model=QueryResponse,
@@ -43,14 +60,23 @@ def parse_retrieved_chunk(
 def query_documents(
     request: RetrievalRequest,
     current_user: User = Depends(get_current_user),
-    reranker: Reranker = Depends(get_reranker),
+    reranker: Reranker = Depends(get_query_reranker),
 ):
-    results = retrieve_documents(
-        query=request.query,
-        current_user=current_user,
-        limit=request.limit,
-        reranker=reranker,
-    )
+    try:
+        results = retrieve_documents(
+            query=request.query,
+            current_user=current_user,
+            limit=request.limit,
+            reranker=reranker,
+        )
+    except RerankerError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "The document reranking service "
+                "is temporarily unavailable."
+            ),
+        ) from exc
 
     chunks: list[RetrievedChunk] = []
 

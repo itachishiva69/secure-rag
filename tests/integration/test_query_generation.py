@@ -3,11 +3,11 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_current_user
+from app.api.query import get_query_reranker
 from app.db.database import get_db
 from app.main import app
 from app.models import Department, Document, User
 from app.models.enums import UserRole
-from app.rag.reranker import get_reranker
 
 
 def create_test_data(db_session):
@@ -170,7 +170,7 @@ def test_query_sends_only_authorized_context_to_llm(
         lambda: finance_user
     )
 
-    app.dependency_overrides[get_reranker] = (
+    app.dependency_overrides[get_query_reranker] = (
         lambda: fake_reranker
     )
 
