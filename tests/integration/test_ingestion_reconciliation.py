@@ -358,7 +358,9 @@ def test_reconciliation_marks_document_failed_when_requeue_fails(
 
     with pytest.raises(
         RuntimeError,
-        match="simulated enqueue failure",
+        match=(
+            "Failed to enqueue reconciliation jobs"
+        ),
     ):
         reconciliation.reconcile_stale_processing_documents(
             db_session,

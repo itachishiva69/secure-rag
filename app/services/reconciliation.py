@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_
@@ -6,6 +7,9 @@ from sqlalchemy.orm import Session
 from app.models import Document
 from app.models.document_status import DocumentStatus
 from app.services.queue import enqueue_ingestion_job
+
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_STALE_PROCESSING_MINUTES = 30
@@ -22,6 +26,7 @@ def find_stale_processing_document_ids(
 
     This function is read-only and does not claim documents.
     """
+
     cutoff = (
         datetime.now(timezone.utc)
         - stale_after
@@ -109,15 +114,21 @@ def reconcile_stale_processing_documents(
     The database transaction is committed before the
     ingestion job is enqueued.
 
-    If enqueueing fails, the document is marked FAILED.
+    All stale documents are attempted. Enqueue failures
+    are recorded and the affected document is marked FAILED.
+    The function raises after processing the remaining
+    documents if any enqueue failed.
     """
 
     recovered_ids: list[int] = []
+    enqueue_failures: list[int] = []
 
     while True:
-        document = _claim_next_stale_processing_document(
-            db,
-            stale_after=stale_after,
+        document = (
+            _claim_next_stale_processing_document(
+                db,
+                stale_after=stale_after,
+            )
         )
 
         if document is None:
@@ -129,7 +140,15 @@ def reconcile_stale_processing_documents(
             enqueue_ingestion_job(
                 document_id
             )
+
         except Exception:
+            logger.exception(
+                "document_reconciliation_enqueue_failed",
+                extra={
+                    "document_id": document_id,
+                },
+            )
+
             failed_document = db.get(
                 Document,
                 document_id,
@@ -142,10 +161,19 @@ def reconcile_stale_processing_documents(
                 failed_document.processing_started_at = None
                 db.commit()
 
-            raise
+            enqueue_failures.append(
+                document_id
+            )
+            continue
 
         recovered_ids.append(
             document_id
+        )
+
+    if enqueue_failures:
+        raise RuntimeError(
+            "Failed to enqueue reconciliation jobs "
+            f"for documents: {enqueue_failures}"
         )
 
     return recovered_ids

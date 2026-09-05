@@ -42,6 +42,9 @@ class Settings(BaseSettings):
 
     context_max_chars: int = 12000
 
+    reconciliation_interval_seconds: int = 300
+    reconciliation_stale_processing_minutes: int = 30
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,

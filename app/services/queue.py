@@ -10,11 +10,16 @@ settings = get_settings()
 
 
 INGESTION_RETRY_MAX = 3
+
 INGESTION_RETRY_INTERVALS = [
     30,
     120,
     300,
 ]
+
+
+INGESTION_QUEUE_NAME = "document-ingestion"
+MAINTENANCE_QUEUE_NAME = "document-maintenance"
 
 
 @lru_cache
@@ -28,7 +33,15 @@ def get_redis() -> Redis:
 @lru_cache
 def get_ingestion_queue() -> Queue:
     return Queue(
-        "document-ingestion",
+        INGESTION_QUEUE_NAME,
+        connection=get_redis(),
+    )
+
+
+@lru_cache
+def get_maintenance_queue() -> Queue:
+    return Queue(
+        MAINTENANCE_QUEUE_NAME,
         connection=get_redis(),
     )
 
