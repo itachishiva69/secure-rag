@@ -19,3 +19,10 @@ python-dotenv
 pytest
 pytest-asyncio
 httpx
+
+pypdf
+python-docx
+
+langchain-text-splitters
+
+sentence-transformers

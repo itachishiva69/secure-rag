@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
 
+    max_upload_size_mb: int = 25
+    storage_path: str = "storage/documents"
+
+    redis_url: str = "redis://localhost:6379/0"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
