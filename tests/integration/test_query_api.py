@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from fastapi.testclient import TestClient
 from qdrant_client.models import ScoredPoint
 
@@ -8,6 +6,7 @@ from app.db.database import get_db
 from app.main import app
 from app.models import Department, Document, User
 from app.models.enums import UserRole
+from app.services.llm_provider import LLMProviderError
 
 
 def create_test_data(db_session):
@@ -341,6 +340,118 @@ def test_user_with_no_department_gets_no_results(
         )
 
         assert captured["limit"] == 5
+
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_llm_provider_failure_returns_502(
+    db_session,
+    monkeypatch,
+):
+    (
+        finance_user,
+        _,
+        finance_document,
+        _,
+    ) = create_test_data(db_session)
+
+    def fake_search(
+        *,
+        query,
+        allowed_department_ids,
+        limit,
+    ):
+        assert allowed_department_ids == [
+            finance_user.department_id
+        ]
+
+        return type(
+            "SearchResult",
+            (),
+            {
+                "points": [
+                    ScoredPoint(
+                        id="finance-point",
+                        version=1,
+                        score=0.95,
+                        payload={
+                            "document_id": (
+                                finance_document.id
+                            ),
+                            "filename": (
+                                "finance-policy.txt"
+                            ),
+                            "chunk_index": 0,
+                            "department_ids": [
+                                finance_user.department_id
+                            ],
+                            "text": (
+                                "Finance department "
+                                "policy information."
+                            ),
+                        },
+                    )
+                ]
+            },
+        )()
+
+    class FailingProvider:
+        def generate(
+            self,
+            *,
+            query,
+            context,
+        ):
+            raise LLMProviderError(
+                "simulated provider failure"
+            )
+
+    monkeypatch.setattr(
+        "app.services.retrieval.search",
+        fake_search,
+    )
+
+    monkeypatch.setattr(
+        "app.api.query.get_llm_provider",
+        lambda: FailingProvider(),
+    )
+
+    app.dependency_overrides[get_db] = (
+        lambda: db_session
+    )
+
+    app.dependency_overrides[get_current_user] = (
+        lambda: finance_user
+    )
+
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            "/query/",
+            json={
+                "query": (
+                    "What is the company finance policy?"
+                ),
+                "limit": 5,
+            },
+        )
+
+        assert response.status_code == 502
+
+        body = response.json()
+
+        assert body["detail"] == (
+            "The language model provider is "
+            "temporarily unavailable."
+        )
+
+        # The internal provider error must never
+        # be exposed to the API client.
+        assert "simulated provider failure" not in (
+            response.text
+        )
 
     finally:
         app.dependency_overrides.clear()

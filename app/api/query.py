@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import get_current_user
 from app.models import User
@@ -10,7 +10,10 @@ from app.schemas.query import (
 )
 from app.services.context import build_context
 from app.services.generation import GenerationService
-from app.services.llm_provider import get_llm_provider
+from app.services.llm_provider import (
+    LLMProviderError,
+    get_llm_provider,
+)
 from app.services.retrieval import retrieve_documents
 
 
@@ -59,12 +62,18 @@ def query_documents(
     else:
         generation_service = GenerationService()
 
-    generation_result = (
-        generation_service.generate_answer(
-            query=request.query,
-            context=context,
+    try:
+        generation_result = (
+            generation_service.generate_answer(
+                query=request.query,
+                context=context,
+            )
         )
-    )
+    except LLMProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The language model provider is temporarily unavailable.",
+        ) from exc
 
     sources = [
         QuerySource(
