@@ -6,6 +6,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+
 TEST_DATABASE_URL = (
     "postgresql+psycopg://"
     "secure_rag:secure_rag_dev"
