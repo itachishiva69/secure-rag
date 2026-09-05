@@ -154,6 +154,9 @@ def search(
     allowed_department_ids: list[int] | None = None,
     limit: int = 5,
 ):
+    if allowed_department_ids is not None and not allowed_department_ids:
+        return []
+
     ensure_collection()
 
     embedding_service = get_embedding_service()
@@ -163,9 +166,6 @@ def search(
     query_filter = None
 
     if allowed_department_ids is not None:
-        if not allowed_department_ids:
-            return []
-
         query_filter = Filter(
             must=[
                 FieldCondition(

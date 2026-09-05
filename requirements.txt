@@ -7,22 +7,25 @@ alembic
 
 pydantic
 pydantic-settings
+email-validator
 
-qdrant-client
-
-python-jose[cryptography]
-passlib[bcrypt]
+PyJWT
+pwdlib[argon2]
 
 python-multipart
 python-dotenv
 
-pytest
-pytest-asyncio
-httpx
+qdrant-client
 
 pypdf
 python-docx
 
 langchain-text-splitters
-
 sentence-transformers
+
+rq
+redis
+
+pytest
+pytest-asyncio
+httpx
