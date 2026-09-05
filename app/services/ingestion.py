@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.models import Document
@@ -14,6 +16,9 @@ from app.services.document_extractor import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def ingest_document(
     db: Session,
     document_id: int,
@@ -21,23 +26,39 @@ def ingest_document(
     document = db.get(Document, document_id)
 
     if document is None:
+        logger.error(
+            "document_ingestion_document_not_found",
+            extra={
+                "document_id": document_id,
+            },
+        )
+
         raise ValueError(
             f"Document {document_id} not found"
         )
+
+    logger.info(
+        "document_ingestion_started",
+        extra={
+            "document_id": document.id,
+            "uploaded_by": document.uploaded_by,
+            "filename": document.filename,
+        },
+    )
 
     document.status = DocumentStatus.PROCESSING
     db.commit()
 
     try:
-        # Remove any previous vectors before processing.
-        #
-        # This is important when:
-        # - the document is being re-indexed;
-        # - a previous attempt partially indexed vectors;
-        # - the previous version of the document is still
-        #   present in Qdrant.
         delete_document_vectors(
             document.id
+        )
+
+        logger.info(
+            "document_ingestion_previous_vectors_removed",
+            extra={
+                "document_id": document.id,
+            },
         )
 
         text = extract_text(
@@ -68,6 +89,17 @@ def ingest_document(
                 "Document has no department assignments"
             )
 
+        logger.info(
+            "document_ingestion_chunks_created",
+            extra={
+                "document_id": document.id,
+                "chunk_count": len(chunks),
+                "department_count": len(
+                    department_ids
+                ),
+            },
+        )
+
         ensure_collection()
 
         indexed_count = index_chunks(
@@ -86,10 +118,20 @@ def ingest_document(
         document.status = DocumentStatus.INDEXED
         db.commit()
 
+        logger.info(
+            "document_ingestion_completed",
+            extra={
+                "document_id": document.id,
+                "indexed_count": indexed_count,
+                "department_count": len(
+                    department_ids
+                ),
+            },
+        )
+
         return indexed_count
 
     except Exception:
-        # Never leave vectors from a failed ingestion attempt.
         try:
             delete_document_vectors(
                 document.id
@@ -97,5 +139,12 @@ def ingest_document(
         finally:
             document.status = DocumentStatus.FAILED
             db.commit()
+
+        logger.exception(
+            "document_ingestion_failed",
+            extra={
+                "document_id": document.id,
+            },
+        )
 
         raise

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
 
@@ -23,6 +25,9 @@ from app.services.llm_provider import (
 from app.services.retrieval import retrieve_documents
 
 
+logger = logging.getLogger(__name__)
+
+
 router = APIRouter(
     prefix="/query",
     tags=["Query"],
@@ -44,6 +49,10 @@ def get_query_reranker() -> Reranker:
     try:
         return get_reranker()
     except RerankerError as exc:
+        logger.exception(
+            "query_reranker_unavailable"
+        )
+
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
@@ -62,6 +71,17 @@ def query_documents(
     current_user: User = Depends(get_current_user),
     reranker: Reranker = Depends(get_query_reranker),
 ):
+    logger.info(
+        "query_started",
+        extra={
+            "user_id": current_user.id,
+            "user_role": current_user.role.value,
+            "department_id": current_user.department_id,
+            "requested_limit": request.limit,
+            "reranker_enabled": reranker is not None,
+        },
+    )
+
     try:
         results = retrieve_documents(
             query=request.query,
@@ -70,6 +90,14 @@ def query_documents(
             reranker=reranker,
         )
     except RerankerError as exc:
+        logger.exception(
+            "query_reranking_failed",
+            extra={
+                "user_id": current_user.id,
+                "requested_limit": request.limit,
+            },
+        )
+
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
@@ -77,6 +105,13 @@ def query_documents(
                 "is temporarily unavailable."
             ),
         ) from exc
+
+    retrieved_point_count = 0
+
+    if results:
+        retrieved_point_count = len(
+            results.points
+        )
 
     chunks: list[RetrievedChunk] = []
 
@@ -95,6 +130,20 @@ def query_documents(
 
     context = build_context(chunks)
 
+    logger.info(
+        "query_retrieval_completed",
+        extra={
+            "user_id": current_user.id,
+            "retrieved_point_count": (
+                retrieved_point_count
+            ),
+            "valid_chunk_count": len(chunks),
+            "context_source_count": len(
+                context.sources
+            ),
+        },
+    )
+
     if context.text:
         generation_service = GenerationService(
             provider=get_llm_provider(),
@@ -110,6 +159,16 @@ def query_documents(
             )
         )
     except LLMProviderError as exc:
+        logger.exception(
+            "query_llm_provider_failed",
+            extra={
+                "user_id": current_user.id,
+                "context_source_count": len(
+                    context.sources
+                ),
+            },
+        )
+
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=(
@@ -126,6 +185,15 @@ def query_documents(
         )
         for source in context.sources
     ]
+
+    logger.info(
+        "query_completed",
+        extra={
+            "user_id": current_user.id,
+            "source_count": len(sources),
+            "answer_generated": True,
+        },
+    )
 
     return QueryResponse(
         query=request.query,
