@@ -6,99 +6,201 @@ from app.rag import qdrant_store
 from app.services.retrieval import retrieve_documents
 
 
-DOCUMENT_CONTENT = {
-    "jwt-authentication.txt": (
-        "JWT authentication uses signed JSON Web Tokens "
-        "to authenticate users. The server validates the "
-        "token before allowing access to protected "
-        "resources. Tokens contain claims such as user "
-        "identity and expiration time."
-    ),
-    "deployment-policy.txt": (
-        "Production deployments require code review, "
-        "automated tests, deployment approval, and "
-        "verification after release. Deployments must "
-        "follow the approved release process."
-    ),
-    "finance-policy.txt": (
-        "The finance budget policy defines annual budget "
-        "planning, expense approval, financial controls, "
-        "expense limits, and accounting procedures."
-    ),
-    "incident-response.txt": (
-        "Security incidents must be reported immediately "
-        "to the security team. Incident response includes "
-        "containment, investigation, remediation, and "
-        "post-incident review."
-    ),
-    "employee-onboarding.txt": (
-        "New employees complete onboarding activities "
-        "including account creation, security training, "
-        "access provisioning, and policy acknowledgement."
-    ),
+EVALUATION_DOCUMENTS = {
+    "jwt-authentication.txt": [
+        (
+            "JWT authentication overview. JSON Web Tokens "
+            "are used to represent authenticated user "
+            "identity between a client and server."
+        ),
+        (
+            "JWT tokens are digitally signed so the server "
+            "can verify that the token was issued by a "
+            "trusted authority."
+        ),
+        (
+            "A JWT commonly contains claims such as the "
+            "subject identifying the user and an expiration "
+            "time that limits how long the token remains valid."
+        ),
+        (
+            "Protected API endpoints validate the JWT before "
+            "allowing the authenticated user to access "
+            "protected resources."
+        ),
+        (
+            "Expired or invalid JWT tokens must be rejected "
+            "rather than granting access to protected "
+            "resources."
+        ),
+    ],
+    "deployment-policy.txt": [
+        (
+            "The deployment policy defines the process for "
+            "releasing software into production environments."
+        ),
+        (
+            "All production changes must undergo peer code "
+            "review before they can be released."
+        ),
+        (
+            "Automated tests must pass successfully before "
+            "a production deployment is approved."
+        ),
+        (
+            "Production releases require explicit deployment "
+            "approval from an authorized reviewer."
+        ),
+        (
+            "After deployment, the release must be verified "
+            "to ensure the application is operating correctly."
+        ),
+    ],
+    "finance-policy.txt": [
+        (
+            "The finance policy describes the organization's "
+            "annual budgeting and financial planning process."
+        ),
+        (
+            "Departments prepare annual budgets based on "
+            "expected operational requirements and planned "
+            "expenditure."
+        ),
+        (
+            "Financial expenses may require approval before "
+            "money can be committed or spent."
+        ),
+        (
+            "Financial controls are used to prevent "
+            "unauthorized spending and maintain accountability."
+        ),
+        (
+            "Accounting procedures define how approved "
+            "expenses are recorded and reported."
+        ),
+    ],
+    "incident-response.txt": [
+        (
+            "The incident response policy defines how "
+            "security incidents are handled."
+        ),
+        (
+            "Employees should report suspected security "
+            "incidents to the security team immediately."
+        ),
+        (
+            "Incident response begins with containment to "
+            "limit the impact of the security event."
+        ),
+        (
+            "Security teams investigate incidents to determine "
+            "the cause, affected systems, and scope."
+        ),
+        (
+            "After remediation, significant incidents should "
+            "undergo a post-incident review."
+        ),
+    ],
+    "employee-onboarding.txt": [
+        (
+            "Employee onboarding covers the activities required "
+            "when a new employee joins the organization."
+        ),
+        (
+            "New employees receive accounts and appropriate "
+            "access to systems required for their role."
+        ),
+        (
+            "Security training introduces employees to "
+            "organizational security requirements."
+        ),
+        (
+            "Employees must acknowledge relevant company "
+            "policies during the onboarding process."
+        ),
+        (
+            "Managers and administrators verify that required "
+            "onboarding activities have been completed."
+        ),
+    ],
 }
 
 
-EVALUATION_QUERIES = [
+PARAPHRASED_QUERIES = [
     (
-        "How does JWT authentication work?",
+        "What proves that an authentication token came from a trusted issuer?",
         "jwt-authentication.txt",
+        1,
     ),
     (
-        "How are users authenticated using tokens?",
+        "How can the system tell whether a user's login credential is still valid?",
         "jwt-authentication.txt",
+        2,
     ),
     (
-        "What happens when a server validates a JWT?",
+        "What should the API do if a user's token has already expired?",
         "jwt-authentication.txt",
+        4,
     ),
     (
-        "What are the requirements before deploying to production?",
+        "Can developers release code without having another person review it first?",
         "deployment-policy.txt",
+        1,
     ),
     (
-        "What approvals are needed for a production release?",
+        "What must be completed before a release can receive the go-ahead?",
         "deployment-policy.txt",
+        2,
     ),
     (
-        "What checks must happen before code is deployed?",
+        "What happens after new software has been pushed live?",
         "deployment-policy.txt",
+        4,
     ),
     (
-        "How does the company handle annual budgeting?",
+        "How does each department plan its spending for the coming year?",
         "finance-policy.txt",
+        1,
     ),
     (
-        "What controls apply to financial expenses?",
+        "What safeguards stop people from spending company money without authorization?",
         "finance-policy.txt",
+        3,
     ),
     (
-        "Who needs to approve budget-related expenses?",
+        "Where are accepted financial transactions documented?",
         "finance-policy.txt",
+        4,
     ),
     (
-        "What should happen after a security incident is reported?",
+        "Who should an employee contact when they notice something that may be a security breach?",
         "incident-response.txt",
+        1,
     ),
     (
-        "What are the steps for handling a security incident?",
+        "What is done first to keep a security problem from spreading?",
         "incident-response.txt",
+        2,
     ),
     (
-        "How should a newly discovered security incident be handled?",
+        "How does the security team determine what caused an incident?",
         "incident-response.txt",
+        3,
     ),
     (
-        "What activities are required when a new employee joins?",
+        "What happens to a new worker's access to company systems?",
         "employee-onboarding.txt",
+        1,
     ),
     (
-        "How are new employee accounts and access provisioned?",
+        "What kind of security education is given to people when they join?",
         "employee-onboarding.txt",
+        2,
     ),
     (
-        "What security training is part of employee onboarding?",
+        "What do new hires have to formally agree to?",
         "employee-onboarding.txt",
+        3,
     ),
 ]
 
@@ -128,7 +230,7 @@ def create_evaluation_data(db_session):
             uploaded_by=user.id,
             status="indexed",
         )
-        for filename in DOCUMENT_CONTENT
+        for filename in EVALUATION_DOCUMENTS
     ]
 
     db_session.add_all(documents)
@@ -150,10 +252,8 @@ def index_evaluation_documents(
             qdrant_store.index_chunks(
                 document_id=document.id,
                 filename=document.filename,
-                chunks=[
-                    DOCUMENT_CONTENT[
-                        document.filename
-                    ]
+                chunks=EVALUATION_DOCUMENTS[
+                    document.filename
                 ],
                 department_ids=[
                     department.id
@@ -175,14 +275,29 @@ def index_evaluation_documents(
         raise
 
 
+def reciprocal_rank(
+    returned_chunks,
+    expected_chunk,
+):
+    for index, chunk in enumerate(
+        returned_chunks,
+        start=1,
+    ):
+        if chunk == expected_chunk:
+            return 1.0 / index
+
+    return 0.0
+
+
 @pytest.mark.parametrize(
-    "query,expected_filename",
-    EVALUATION_QUERIES,
+    "query,expected_filename,expected_chunk_index",
+    PARAPHRASED_QUERIES,
 )
-def test_retrieval_returns_relevant_document(
+def test_candidate_retrieval_returns_relevant_chunk(
     db_session,
     query,
     expected_filename,
+    expected_chunk_index,
 ):
     (
         user,
@@ -201,22 +316,30 @@ def test_retrieval_returns_relevant_document(
         results = retrieve_documents(
             query=query,
             current_user=user,
-            limit=3,
+            limit=10,
         )
 
         assert results is not None
 
-        returned_filenames = [
-            point.payload["filename"]
+        returned_chunks = [
+            (
+                point.payload["filename"],
+                point.payload["chunk_index"],
+            )
             for point in results.points
         ]
 
-        assert expected_filename in returned_filenames
+        expected_chunk = (
+            expected_filename,
+            expected_chunk_index,
+        )
+
+        assert expected_chunk in returned_chunks
 
         print(
             f"\nQuery: {query}"
-            f"\nExpected: {expected_filename}"
-            f"\nTop-3: {returned_filenames}"
+            f"\nExpected: {expected_chunk}"
+            f"\nTop-10: {returned_chunks}"
         )
 
     finally:
@@ -226,7 +349,7 @@ def test_retrieval_returns_relevant_document(
             )
 
 
-def test_retrieval_quality_baseline(
+def test_candidate_retrieval_baseline(
     db_session,
 ):
     (
@@ -239,7 +362,12 @@ def test_retrieval_quality_baseline(
 
     top_1_hits = 0
     top_3_hits = 0
-    total_queries = len(EVALUATION_QUERIES)
+    top_5_hits = 0
+    top_10_hits = 0
+
+    reciprocal_ranks = []
+
+    total_queries = len(PARAPHRASED_QUERIES)
 
     try:
         indexed_document_ids = index_evaluation_documents(
@@ -247,27 +375,52 @@ def test_retrieval_quality_baseline(
             documents,
         )
 
-        for query, expected_filename in EVALUATION_QUERIES:
+        for (
+            query,
+            expected_filename,
+            expected_chunk_index,
+        ) in PARAPHRASED_QUERIES:
             results = retrieve_documents(
                 query=query,
                 current_user=user,
-                limit=3,
+                limit=10,
             )
 
-            returned_filenames = [
-                point.payload["filename"]
+            returned_chunks = [
+                (
+                    point.payload["filename"],
+                    point.payload["chunk_index"],
+                )
                 for point in results.points
             ]
 
+            expected_chunk = (
+                expected_filename,
+                expected_chunk_index,
+            )
+
             if (
-                returned_filenames
-                and returned_filenames[0]
-                == expected_filename
+                returned_chunks
+                and returned_chunks[0]
+                == expected_chunk
             ):
                 top_1_hits += 1
 
-            if expected_filename in returned_filenames:
+            if expected_chunk in returned_chunks[:3]:
                 top_3_hits += 1
+
+            if expected_chunk in returned_chunks[:5]:
+                top_5_hits += 1
+
+            if expected_chunk in returned_chunks[:10]:
+                top_10_hits += 1
+
+            reciprocal_ranks.append(
+                reciprocal_rank(
+                    returned_chunks,
+                    expected_chunk,
+                )
+            )
 
         recall_at_1 = (
             top_1_hits / total_queries
@@ -277,15 +430,34 @@ def test_retrieval_quality_baseline(
             top_3_hits / total_queries
         )
 
+        recall_at_5 = (
+            top_5_hits / total_queries
+        )
+
+        recall_at_10 = (
+            top_10_hits / total_queries
+        )
+
+        mean_reciprocal_rank = (
+            sum(reciprocal_ranks)
+            / total_queries
+        )
+
         print(
-            "\nRetrieval baseline:"
+            "\nCandidate retrieval baseline:"
             f"\n  Queries: {total_queries}"
             f"\n  Recall@1: {recall_at_1:.2%}"
             f"\n  Recall@3: {recall_at_3:.2%}"
+            f"\n  Recall@5: {recall_at_5:.2%}"
+            f"\n  Recall@10: {recall_at_10:.2%}"
+            f"\n  MRR: {mean_reciprocal_rank:.4f}"
         )
 
         assert total_queries > 0
-        assert recall_at_3 >= recall_at_1
+        assert recall_at_1 <= recall_at_3
+        assert recall_at_3 <= recall_at_5
+        assert recall_at_5 <= recall_at_10
+        assert 0.0 <= mean_reciprocal_rank <= 1.0
 
     finally:
         for document_id in indexed_document_ids:
@@ -294,7 +466,7 @@ def test_retrieval_quality_baseline(
             )
 
 
-def test_retrieval_does_not_return_unknown_document_as_relevant(
+def test_candidate_retrieval_respects_department_authorization(
     db_session,
 ):
     (
@@ -313,31 +485,21 @@ def test_retrieval_does_not_return_unknown_document_as_relevant(
 
         results = retrieve_documents(
             query=(
-                "What is the company's policy for "
-                "international travel visas?"
+                "How does the system verify a user's "
+                "authentication token?"
             ),
             current_user=user,
-            limit=3,
+            limit=10,
         )
 
-        returned_filenames = [
-            point.payload["filename"]
-            for point in results.points
-        ]
-
-        print(
-            "\nNegative query:"
-            "\n  Query: What is the company's policy "
-            "for international travel visas?"
-            f"\n  Retrieved: {returned_filenames}"
-        )
-
-        # Dense retrieval may still return the nearest
-        # available documents for an unknown topic.
-        # This test intentionally does not require an
-        # empty result because semantic search is not
-        # a relevance classifier.
         assert results is not None
+
+        for point in results.points:
+            payload = point.payload
+
+            assert payload["department_ids"] == [
+                department.id
+            ]
 
     finally:
         for document_id in indexed_document_ids:

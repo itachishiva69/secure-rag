@@ -252,7 +252,7 @@ def test_user_with_no_department_gets_no_results(
     db_session.add(user)
     db_session.flush()
 
-    captured = {}
+    search_called = False
 
     def fake_search(
         *,
@@ -260,19 +260,14 @@ def test_user_with_no_department_gets_no_results(
         allowed_department_ids,
         limit,
     ):
-        captured["query"] = query
-        captured["allowed_department_ids"] = (
-            allowed_department_ids
-        )
-        captured["limit"] = limit
+        nonlocal search_called
 
-        return type(
-            "SearchResult",
-            (),
-            {
-                "points": []
-            },
-        )()
+        search_called = True
+
+        raise AssertionError(
+            "Qdrant search must not be called "
+            "when the user has no department"
+        )
 
     class FakeProvider:
         def generate(
@@ -333,13 +328,7 @@ def test_user_with_no_department_gets_no_results(
 
         assert body["sources"] == []
 
-        assert captured["allowed_department_ids"] == []
-
-        assert captured["query"] == (
-            "What documents do I have access to?"
-        )
-
-        assert captured["limit"] == 5
+        assert search_called is False
 
     finally:
         app.dependency_overrides.clear()

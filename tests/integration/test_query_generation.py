@@ -7,6 +7,7 @@ from app.db.database import get_db
 from app.main import app
 from app.models import Department, Document, User
 from app.models.enums import UserRole
+from app.rag.reranker import get_reranker
 
 
 def create_test_data(db_session):
@@ -92,13 +93,24 @@ def test_query_sends_only_authorized_context_to_llm(
         engineering_document,
     ) = create_test_data(db_session)
 
+    captured = {}
+
+    fake_reranker = object()
+
     def fake_retrieve_documents(
         *,
         query,
         current_user,
         limit,
+        reranker,
     ):
+        captured["query"] = query
+        captured["current_user"] = current_user
+        captured["limit"] = limit
+        captured["reranker"] = reranker
+
         assert current_user.id == finance_user.id
+        assert reranker is fake_reranker
 
         return SimpleNamespace(
             points=[
@@ -158,6 +170,10 @@ def test_query_sends_only_authorized_context_to_llm(
         lambda: finance_user
     )
 
+    app.dependency_overrides[get_reranker] = (
+        lambda: fake_reranker
+    )
+
     client = TestClient(app)
 
     try:
@@ -188,6 +204,16 @@ def test_query_sends_only_authorized_context_to_llm(
                 "chunk_index": 0,
             }
         ]
+
+        assert captured["query"] == (
+            "What is the finance budget policy?"
+        )
+
+        assert captured["current_user"] is finance_user
+
+        assert captured["limit"] == 5
+
+        assert captured["reranker"] is fake_reranker
 
         assert fake_provider.query == (
             "What is the finance budget policy?"

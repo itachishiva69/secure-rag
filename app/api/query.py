@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from app.api.dependencies import get_current_user
 from app.models import User
+from app.rag.reranker import Reranker, get_reranker
 from app.schemas.query import (
     QueryResponse,
     QuerySource,
@@ -27,14 +28,6 @@ router = APIRouter(
 def parse_retrieved_chunk(
     payload: dict,
 ) -> RetrievedChunk | None:
-    """
-    Validate a raw Qdrant payload before it enters
-    the application context or reaches the LLM.
-
-    Invalid payloads are ignored rather than causing
-    the entire query request to fail.
-    """
-
     try:
         return RetrievedChunk.model_validate(
             payload
@@ -50,11 +43,13 @@ def parse_retrieved_chunk(
 def query_documents(
     request: RetrievalRequest,
     current_user: User = Depends(get_current_user),
+    reranker: Reranker = Depends(get_reranker),
 ):
     results = retrieve_documents(
         query=request.query,
         current_user=current_user,
         limit=request.limit,
+        reranker=reranker,
     )
 
     chunks: list[RetrievedChunk] = []

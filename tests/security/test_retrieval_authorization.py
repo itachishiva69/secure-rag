@@ -40,19 +40,15 @@ def test_user_without_department_gets_no_department_access():
         "app.services.retrieval.search"
     ) as mock_search:
 
-        mock_search.return_value = None
-
-        retrieve_documents(
+        result = retrieve_documents(
             query="confidential information",
             current_user=user,
             limit=5,
         )
 
-        mock_search.assert_called_once_with(
-            query="confidential information",
-            allowed_department_ids=[],
-            limit=5,
-        )
+        assert result == []
+
+        mock_search.assert_not_called()
 
 
 def test_admin_retrieval_is_unrestricted():
