@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     )
     llm_timeout_seconds: float = 30.0
 
+    reranker_model: str = (
+        "cross-encoder/ms-marco-MiniLM-L6-v2"
+    )
+    reranker_candidate_limit: int = 10
+
     context_max_chars: int = 12000
 
     model_config = SettingsConfigDict(

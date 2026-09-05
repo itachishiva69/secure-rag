@@ -1,13 +1,11 @@
 from pydantic import ValidationError
 
+from app.core.config import get_settings
 from app.models import User
 from app.rag.qdrant_store import search
 from app.rag.reranker import Reranker
 from app.schemas.query import RetrievedChunk
 from app.services.authorization import get_allowed_department_ids
-
-
-RERANKER_CANDIDATE_LIMIT = 10
 
 
 def _is_authorized_chunk(
@@ -37,9 +35,6 @@ def retrieve_documents(
         current_user
     )
 
-    # A non-admin user without a department has no
-    # authorized documents. Return before touching
-    # Qdrant or the reranker.
     if (
         allowed_department_ids is not None
         and not allowed_department_ids
@@ -51,7 +46,7 @@ def retrieve_documents(
     if reranker is not None:
         candidate_limit = max(
             limit,
-            RERANKER_CANDIDATE_LIMIT,
+            get_settings().reranker_candidate_limit,
         )
 
     results = search(

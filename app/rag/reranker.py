@@ -3,10 +3,8 @@ from functools import lru_cache
 
 from sentence_transformers import CrossEncoder
 
+from app.core.config import get_settings
 from app.schemas.query import RetrievedChunk
-
-
-RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
 
 
 class RerankerError(Exception):
@@ -22,8 +20,11 @@ class RerankedChunk:
 class Reranker:
     def __init__(
         self,
-        model_name: str = RERANKER_MODEL,
+        model_name: str | None = None,
     ):
+        if model_name is None:
+            model_name = get_settings().reranker_model
+
         try:
             self.model = CrossEncoder(
                 model_name,
