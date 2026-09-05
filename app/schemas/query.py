@@ -6,7 +6,6 @@ class RetrievalRequest(BaseModel):
         min_length=1,
         max_length=2000,
     )
-
     limit: int = Field(
         default=5,
         ge=1,
@@ -24,6 +23,18 @@ class RetrievedChunk(BaseModel):
     chunk_index: int
     department_ids: list[int]
     text: str
+
+
+class QuerySource(BaseModel):
+    document_id: int
+    filename: str
+    chunk_index: int
+
+
+class QueryResponse(BaseModel):
+    query: str
+    answer: str
+    sources: list[QuerySource]
 
 
 class RetrievalResponse(BaseModel):

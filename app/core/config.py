@@ -22,6 +22,12 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
+    llm_api_key: str | None = None
+    llm_model: str = "llama-3.3-70b-versatile"
+    llm_base_url: str = (
+        "https://api.groq.com/openai/v1"
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,

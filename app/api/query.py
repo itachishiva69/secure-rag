@@ -3,10 +3,14 @@ from fastapi import APIRouter, Depends
 from app.api.dependencies import get_current_user
 from app.models import User
 from app.schemas.query import (
-    RetrievalRequest,
-    RetrievalResponse,
+    QueryResponse,
+    QuerySource,
     RetrievedChunk,
+    RetrievalRequest,
 )
+from app.services.context import build_context
+from app.services.generation import GenerationService
+from app.services.llm_provider import get_llm_provider
 from app.services.retrieval import retrieve_documents
 
 
@@ -18,7 +22,7 @@ router = APIRouter(
 
 @router.post(
     "/",
-    response_model=RetrievalResponse,
+    response_model=QueryResponse,
 )
 def query_documents(
     request: RetrievalRequest,
@@ -30,7 +34,7 @@ def query_documents(
         limit=request.limit,
     )
 
-    chunks = []
+    chunks: list[RetrievedChunk] = []
 
     if results:
         for result in results.points:
@@ -46,7 +50,33 @@ def query_documents(
                 )
             )
 
-    return RetrievalResponse(
+    context = build_context(chunks)
+
+    if context.text:
+        generation_service = GenerationService(
+            provider=get_llm_provider(),
+        )
+    else:
+        generation_service = GenerationService()
+
+    generation_result = (
+        generation_service.generate_answer(
+            query=request.query,
+            context=context,
+        )
+    )
+
+    sources = [
+        QuerySource(
+            document_id=source.document_id,
+            filename=source.filename,
+            chunk_index=source.chunk_index,
+        )
+        for source in context.sources
+    ]
+
+    return QueryResponse(
         query=request.query,
-        results=chunks,
+        answer=generation_result.answer,
+        sources=sources,
     )

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 from qdrant_client.models import ScoredPoint
 
@@ -135,9 +137,29 @@ def test_finance_user_retrieval_only_returns_finance_chunks(
             },
         )()
 
+    class FakeProvider:
+        def generate(
+            self,
+            *,
+            query,
+            context,
+        ):
+            captured["llm_query"] = query
+            captured["llm_context"] = context
+
+            return (
+                "The finance department policy "
+                "contains finance information."
+            )
+
     monkeypatch.setattr(
         "app.services.retrieval.search",
         fake_search,
+    )
+
+    monkeypatch.setattr(
+        "app.api.query.get_llm_provider",
+        lambda: FakeProvider(),
     )
 
     app.dependency_overrides[get_db] = (
@@ -169,42 +191,49 @@ def test_finance_user_retrieval_only_returns_finance_chunks(
             "What is the company finance policy?"
         )
 
-        assert len(body["results"]) == 1
-
-        result = body["results"][0]
-
-        assert result["document_id"] == (
-            finance_document.id
+        assert body["answer"] == (
+            "The finance department policy "
+            "contains finance information."
         )
 
-        assert result["filename"] == (
-            "finance-policy.txt"
-        )
-
-        assert result["department_ids"] == [
-            finance_user.department_id
+        assert body["sources"] == [
+            {
+                "document_id": finance_document.id,
+                "filename": "finance-policy.txt",
+                "chunk_index": 0,
+            }
         ]
 
-        assert result["text"] == (
-            "Finance department policy information."
-        )
-
-        # Authorization must reach the retrieval layer.
+        # Authorization must reach retrieval.
         assert captured["allowed_department_ids"] == [
             finance_user.department_id
         ]
 
-        # The Engineering department must not be
-        # included in the Finance user's allowed IDs.
         assert engineering_user.department_id not in (
             captured["allowed_department_ids"]
         )
 
-        assert captured["query"] == (
+        # The LLM receives the authorized context.
+        assert captured["llm_query"] == (
             "What is the company finance policy?"
         )
 
-        assert captured["limit"] == 5
+        assert (
+            "Finance department policy information."
+            in captured["llm_context"].text
+        )
+
+        # The other department must never reach
+        # the LLM context.
+        assert (
+            "engineering-secret.txt"
+            not in captured["llm_context"].text
+        )
+
+        assert (
+            "Engineering"
+            not in captured["llm_context"].text
+        )
 
     finally:
         app.dependency_overrides.clear()
@@ -246,9 +275,26 @@ def test_user_with_no_department_gets_no_results(
             },
         )()
 
+    class FakeProvider:
+        def generate(
+            self,
+            *,
+            query,
+            context,
+        ):
+            raise AssertionError(
+                "LLM must not be called when "
+                "there is no authorized context"
+            )
+
     monkeypatch.setattr(
         "app.services.retrieval.search",
         fake_search,
+    )
+
+    monkeypatch.setattr(
+        "app.api.query.get_llm_provider",
+        lambda: FakeProvider(),
     )
 
     app.dependency_overrides[get_db] = (
@@ -280,7 +326,13 @@ def test_user_with_no_department_gets_no_results(
             "What documents do I have access to?"
         )
 
-        assert body["results"] == []
+        assert body["answer"] == (
+            "I couldn't find any relevant "
+            "information in the documents "
+            "you are authorized to access."
+        )
+
+        assert body["sources"] == []
 
         assert captured["allowed_department_ids"] == []
 

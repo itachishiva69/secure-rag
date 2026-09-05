@@ -29,3 +29,5 @@ redis
 pytest
 pytest-asyncio
 httpx
+
+openai
