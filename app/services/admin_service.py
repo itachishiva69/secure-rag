@@ -1,11 +1,9 @@
 from fastapi import HTTPException, status
 from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import Department, User
+from app.models import Department, Document, User
 from app.models.enums import UserRole
-from app.schemas.department import DepartmentCreate
 
 
 def create_department(
@@ -24,9 +22,7 @@ def create_department(
     existing_department = (
         db.query(Department)
         .filter(
-            func.lower(
-                Department.name
-            )
+            func.lower(Department.name)
             == normalized_name.lower()
         )
         .first()
@@ -43,18 +39,129 @@ def create_department(
     )
 
     db.add(department)
+    db.flush()
 
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
+    return department
 
+
+def update_department(
+    db: Session,
+    *,
+    department_id: int,
+    name: str,
+) -> Department:
+    department = (
+        db.query(Department)
+        .filter(
+            Department.id == department_id
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if department is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Department not found",
+        )
+
+    normalized_name = name.strip()
+
+    if not normalized_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Department name cannot be empty",
+        )
+
+    existing_department = (
+        db.query(Department)
+        .filter(
+            func.lower(Department.name)
+            == normalized_name.lower(),
+            Department.id != department_id,
+        )
+        .first()
+    )
+
+    if existing_department is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Department already exists",
-        ) from exc
+        )
+
+    department.name = normalized_name
+
+    db.flush()
 
     return department
+
+
+def delete_department(
+    db: Session,
+    *,
+    department_id: int,
+) -> None:
+    department = (
+        db.query(Department)
+        .filter(
+            Department.id == department_id
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if department is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Department not found",
+        )
+
+    user_count = (
+        db.query(
+            func.count(User.id)
+        )
+        .filter(
+            User.department_id
+            == department_id
+        )
+        .scalar()
+        or 0
+    )
+
+    if user_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Department cannot be deleted "
+                "while users are assigned to it"
+            ),
+        )
+
+    document_count = (
+        db.query(
+            func.count(
+                func.distinct(Document.id)
+            )
+        )
+        .join(Document.departments)
+        .filter(
+            Department.id == department_id
+        )
+        .scalar()
+        or 0
+    )
+
+    if document_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Department cannot be deleted "
+                "while documents are assigned to it"
+            ),
+        )
+
+    db.delete(department)
+    db.flush()
 
 
 def create_user(
@@ -112,16 +219,134 @@ def create_user(
     )
 
     db.add(user)
+    db.flush()
 
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
+    return user
 
+
+def update_user(
+    db: Session,
+    *,
+    user_id: int,
+    email: str | None,
+    role: UserRole | None,
+    department_id: int | None,
+    email_provided: bool,
+    role_provided: bool,
+    department_provided: bool,
+) -> User:
+    user = (
+        db.query(User)
+        .filter(
+            User.id == user_id
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if user is None:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User email already exists",
-        ) from exc
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    new_email = user.email
+
+    if email_provided:
+        if email is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email cannot be null",
+            )
+
+        new_email = email.strip().lower()
+
+        existing_user = (
+            db.query(User)
+            .filter(
+                func.lower(User.email)
+                == new_email,
+                User.id != user_id,
+            )
+            .first()
+        )
+
+        if existing_user is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User email already exists",
+            )
+
+    if role_provided:
+        if role is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Role cannot be null",
+            )
+
+        new_role = role
+    else:
+        new_role = user.role
+
+    if department_provided:
+        new_department_id = department_id
+    else:
+        new_department_id = user.department_id
+
+    if new_department_id is not None:
+        department = db.get(
+            Department,
+            new_department_id,
+        )
+
+        if department is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Department not found",
+            )
+
+    if (
+        new_role == UserRole.USER
+        and new_department_id is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "A department is required for "
+                "user accounts"
+            ),
+        )
+
+    if (
+        user.role == UserRole.ADMIN
+        and new_role != UserRole.ADMIN
+    ):
+        remaining_admins = (
+            db.query(
+                func.count(User.id)
+            )
+            .filter(
+                User.role == UserRole.ADMIN,
+                User.id != user_id,
+            )
+            .scalar()
+            or 0
+        )
+
+        if remaining_admins == 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "The last administrator "
+                    "cannot be demoted"
+                ),
+            )
+
+    user.email = new_email
+    user.role = new_role
+    user.department_id = new_department_id
+
+    db.flush()
 
     return user
 

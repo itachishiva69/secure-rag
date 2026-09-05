@@ -14,6 +14,17 @@ class DepartmentCreate(BaseModel):
     )
 
 
+class DepartmentUpdate(BaseModel):
+    name: str = Field(
+        min_length=1,
+        max_length=100,
+    )
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
+
+
 class DepartmentResponse(BaseModel):
     id: int
     name: str

@@ -10,14 +10,33 @@ from pydantic import (
 
 class UserCreate(BaseModel):
     email: EmailStr
+
     password: str = Field(
         min_length=8,
         max_length=128,
     )
+
     role: str = Field(
         min_length=1,
         max_length=20,
     )
+
+    department_id: int | None = None
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
+
+
+class UserUpdate(BaseModel):
+    email: EmailStr | None = None
+
+    role: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=20,
+    )
+
     department_id: int | None = None
 
     model_config = ConfigDict(
