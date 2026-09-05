@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     query_rate_limit_requests: int = 30
     query_rate_limit_window_seconds: int = 60
 
+    upload_rate_limit_requests: int = 10
+    upload_rate_limit_window_seconds: int = 60
+
     context_max_chars: int = 12000
 
     model_config = SettingsConfigDict(

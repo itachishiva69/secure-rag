@@ -1,4 +1,4 @@
-import logging
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -16,51 +16,27 @@ from app.services.document_extractor import (
 )
 
 
-logger = logging.getLogger(__name__)
-
-
 def ingest_document(
     db: Session,
     document_id: int,
 ) -> int:
-    document = db.get(Document, document_id)
+    document = db.get(
+        Document,
+        document_id,
+    )
 
     if document is None:
-        logger.error(
-            "document_ingestion_document_not_found",
-            extra={
-                "document_id": document_id,
-            },
-        )
-
         raise ValueError(
             f"Document {document_id} not found"
         )
 
-    logger.info(
-        "document_ingestion_started",
-        extra={
-            "document_id": document.id,
-            "uploaded_by": document.uploaded_by,
-            "filename": document.filename,
-        },
-    )
-
     document.status = DocumentStatus.PROCESSING
+    document.processing_started_at = datetime.now(
+        timezone.utc
+    )
     db.commit()
 
     try:
-        delete_document_vectors(
-            document.id
-        )
-
-        logger.info(
-            "document_ingestion_previous_vectors_removed",
-            extra={
-                "document_id": document.id,
-            },
-        )
-
         text = extract_text(
             document.storage_path
         )
@@ -89,18 +65,14 @@ def ingest_document(
                 "Document has no department assignments"
             )
 
-        logger.info(
-            "document_ingestion_chunks_created",
-            extra={
-                "document_id": document.id,
-                "chunk_count": len(chunks),
-                "department_count": len(
-                    department_ids
-                ),
-            },
-        )
-
         ensure_collection()
+
+        # Remove any previous index before creating the
+        # new version. This prevents stale chunks from
+        # surviving a successful re-index.
+        delete_document_vectors(
+            document.id
+        )
 
         indexed_count = index_chunks(
             document_id=document.id,
@@ -109,42 +81,29 @@ def ingest_document(
             department_ids=department_ids,
         )
 
-        if indexed_count != len(chunks):
-            raise RuntimeError(
-                "Indexed chunk count does not match "
-                "the generated chunk count"
-            )
-
         document.status = DocumentStatus.INDEXED
-        db.commit()
+        document.processing_started_at = None
 
-        logger.info(
-            "document_ingestion_completed",
-            extra={
-                "document_id": document.id,
-                "indexed_count": indexed_count,
-                "department_count": len(
-                    department_ids
-                ),
-            },
-        )
+        db.commit()
 
         return indexed_count
 
     except Exception:
+        # A failure after partial Qdrant writes must not
+        # leave an incomplete or stale index behind.
         try:
             delete_document_vectors(
                 document.id
             )
-        finally:
-            document.status = DocumentStatus.FAILED
-            db.commit()
+        except Exception:
+            # The original ingestion error is more useful
+            # to the caller than a cleanup error. The document
+            # will still be marked FAILED below.
+            pass
 
-        logger.exception(
-            "document_ingestion_failed",
-            extra={
-                "document_id": document.id,
-            },
-        )
+        document.status = DocumentStatus.FAILED
+        document.processing_started_at = None
+
+        db.commit()
 
         raise

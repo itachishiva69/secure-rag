@@ -1,8 +1,11 @@
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
-from app.models import Department, Document, DocumentDepartment, User
+from app.models import Department, Document
+from app.models.document_status import DocumentStatus
+from app.models.enums import UserRole
+from app.models import User
 from app.schemas.document import DocumentCreate
 
 
@@ -11,53 +14,68 @@ def create_document(
     current_user: User,
     data: DocumentCreate,
 ) -> Document:
-
-    if current_user.role.value != "admin":
+    if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required",
         )
 
-    if not data.department_ids:
+    requested_department_ids = list(
+        dict.fromkeys(data.department_ids)
+    )
+
+    if not requested_department_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one department is required",
         )
 
-    department_ids = set(data.department_ids)
-
-    departments = db.execute(
-        select(Department).where(
-            Department.id.in_(department_ids)
+    departments = (
+        db.query(Department)
+        .filter(
+            Department.id.in_(
+                requested_department_ids
+            )
         )
-    ).scalars().all()
+        .all()
+    )
 
-    if len(departments) != len(department_ids):
+    found_department_ids = {
+        department.id
+        for department in departments
+    }
+
+    missing_department_ids = [
+        department_id
+        for department_id in requested_department_ids
+        if department_id
+        not in found_department_ids
+    ]
+
+    if missing_department_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="One or more departments do not exist",
+            detail=(
+                "One or more departments do not exist"
+            ),
         )
 
     document = Document(
         filename=data.filename,
         storage_path=data.storage_path,
         uploaded_by=current_user.id,
-        status="uploaded",
+        status=DocumentStatus.UPLOADED,
     )
 
+    document.departments = departments
+
     db.add(document)
+
+    # Flush so the document ID and relationship
+    # rows are created, but do NOT commit here.
+    #
+    # The API layer owns the transaction boundary.
     db.flush()
-
-    for department_id in department_ids:
-        db.add(
-            DocumentDepartment(
-                document_id=document.id,
-                department_id=department_id,
-            )
-        )
-
-    db.commit()
-    db.refresh(document)
 
     return document
 
@@ -67,40 +85,33 @@ def get_document_for_user(
     document_id: int,
     current_user: User,
 ) -> Document:
-
-    # Admins can access every document.
-    if current_user.role.value == "admin":
-        document = db.get(Document, document_id)
-
-        if document is None:
+    if current_user.role == UserRole.ADMIN:
+        document = (
+            db.query(Document)
+            .filter(
+                Document.id == document_id
+            )
+            .first()
+        )
+    else:
+        if current_user.department_id is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Document not found",
             )
 
-        return document
-
-    # Non-admin users must be restricted by department.
-    if current_user.department_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not assigned to a department",
+        document = (
+            db.query(Document)
+            .join(Document.departments)
+            .filter(
+                and_(
+                    Document.id == document_id,
+                    Department.id
+                    == current_user.department_id,
+                )
+            )
+            .first()
         )
-
-    query = (
-        select(Document)
-        .join(
-            DocumentDepartment,
-            Document.id == DocumentDepartment.document_id,
-        )
-        .where(
-            Document.id == document_id,
-            DocumentDepartment.department_id
-            == current_user.department_id,
-        )
-    )
-
-    document = db.execute(query).scalar_one_or_none()
 
     if document is None:
         raise HTTPException(
