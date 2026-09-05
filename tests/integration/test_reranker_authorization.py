@@ -143,6 +143,7 @@ def test_reranker_receives_only_authorized_candidates(
     )
 
     results = retrieve_documents(
+        db=db_session,
         query="department information",
         current_user=user,
         limit=5,
