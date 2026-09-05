@@ -22,8 +22,7 @@ from app.services.document_service import (
     get_document_for_user,
 )
 from app.services.file_storage import save_uploaded_file
-from app.services.queue import get_ingestion_queue
-from app.services.jobs import ingest_document_job
+from app.services.queue import enqueue_ingestion_job
 
 
 router = APIRouter(
@@ -57,13 +56,17 @@ async def upload_document(
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="department_ids must contain integers",
+            detail=(
+                "department_ids must contain integers"
+            ),
         )
 
     if not parsed_department_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one department is required",
+            detail=(
+                "At least one department is required"
+            ),
         )
 
     storage_path = await save_uploaded_file(file)
@@ -78,11 +81,8 @@ async def upload_document(
         ),
     )
 
-    queue = get_ingestion_queue()
-
-    queue.enqueue(
-        ingest_document_job,
-        document.id,
+    enqueue_ingestion_job(
+        document.id
     )
 
     return DocumentResponse(

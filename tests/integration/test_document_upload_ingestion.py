@@ -25,7 +25,12 @@ class FakeQueue:
     def __init__(self):
         self.jobs = []
 
-    def enqueue(self, function, *args, **kwargs):
+    def enqueue(
+        self,
+        function,
+        *args,
+        **kwargs,
+    ):
         self.jobs.append(
             {
                 "function": function,
@@ -51,7 +56,9 @@ class SessionContext:
         return False
 
 
-def get_document_vectors(document_id: int):
+def get_document_vectors(
+    document_id: int,
+):
     points, _ = qdrant_store.client.scroll(
         collection_name=(
             qdrant_store.settings.qdrant_collection
@@ -137,12 +144,25 @@ def test_admin_uploads_document_and_worker_indexes_it(
 
     fake_queue = FakeQueue()
 
-    # The upload endpoint imported get_ingestion_queue
-    # directly, so patch the reference used by the route.
+    def fake_enqueue_ingestion_job(
+        document_id: int,
+    ):
+        jobs_list = fake_queue.jobs
+
+        jobs_list.append(
+            {
+                "function": jobs.ingest_document_job,
+                "args": (document_id,),
+                "kwargs": {},
+            }
+        )
+
+    # The upload endpoint now calls
+    # enqueue_ingestion_job() directly.
     monkeypatch.setattr(
         documents_api,
-        "get_ingestion_queue",
-        lambda: fake_queue,
+        "enqueue_ingestion_job",
+        fake_enqueue_ingestion_job,
     )
 
     # The worker imported SessionLocal directly,
@@ -310,12 +330,23 @@ def test_non_admin_cannot_upload_document(
 
     fake_queue = FakeQueue()
 
-    # Patch the reference actually used by
+    def fake_enqueue_ingestion_job(
+        document_id: int,
+    ):
+        fake_queue.jobs.append(
+            {
+                "function": jobs.ingest_document_job,
+                "args": (document_id,),
+                "kwargs": {},
+            }
+        )
+
+    # Patch the function actually used by
     # app.api.documents.
     monkeypatch.setattr(
         documents_api,
-        "get_ingestion_queue",
-        lambda: fake_queue,
+        "enqueue_ingestion_job",
+        fake_enqueue_ingestion_job,
     )
 
     app.dependency_overrides[get_db] = (
