@@ -3,6 +3,7 @@ from app.services.context import (
     ContextResult,
     ContextSource,
     build_context,
+    deduplicate_chunks,
 )
 
 
@@ -120,3 +121,59 @@ def test_build_context_does_not_include_department_ids():
             chunk_index=0,
         )
     ]
+
+
+def test_deduplicate_chunks_removes_duplicate_chunk_identity():
+    chunks = [
+        RetrievedChunk(
+            document_id=1,
+            filename="policy.txt",
+            chunk_index=0,
+            department_ids=[10],
+            text="First version.",
+        ),
+        RetrievedChunk(
+            document_id=1,
+            filename="policy.txt",
+            chunk_index=0,
+            department_ids=[10],
+            text="Duplicate version.",
+        ),
+        RetrievedChunk(
+            document_id=1,
+            filename="policy.txt",
+            chunk_index=1,
+            department_ids=[10],
+            text="Second chunk.",
+        ),
+    ]
+
+    result = deduplicate_chunks(chunks)
+
+    assert result == [
+        chunks[0],
+        chunks[2],
+    ]
+
+
+def test_deduplicate_chunks_preserves_identical_text_from_different_documents():
+    chunks = [
+        RetrievedChunk(
+            document_id=1,
+            filename="policy-a.txt",
+            chunk_index=0,
+            department_ids=[10],
+            text="The same policy statement.",
+        ),
+        RetrievedChunk(
+            document_id=2,
+            filename="policy-b.txt",
+            chunk_index=0,
+            department_ids=[10],
+            text="The same policy statement.",
+        ),
+    ]
+
+    result = deduplicate_chunks(chunks)
+
+    assert result == chunks

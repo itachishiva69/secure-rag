@@ -16,6 +16,36 @@ class ContextResult:
     sources: list[ContextSource]
 
 
+def deduplicate_chunks(
+    chunks: list[RetrievedChunk],
+) -> list[RetrievedChunk]:
+    """
+    Remove duplicate references to the same document chunk.
+
+    Chunk identity is based on:
+        document_id + chunk_index
+
+    Original retrieval order is preserved.
+    """
+
+    seen: set[tuple[int, int]] = set()
+    unique_chunks: list[RetrievedChunk] = []
+
+    for chunk in chunks:
+        chunk_key = (
+            chunk.document_id,
+            chunk.chunk_index,
+        )
+
+        if chunk_key in seen:
+            continue
+
+        seen.add(chunk_key)
+        unique_chunks.append(chunk)
+
+    return unique_chunks
+
+
 def build_context(
     chunks: list[RetrievedChunk],
 ) -> ContextResult:
@@ -26,9 +56,14 @@ def build_context(
     Authorization must already have happened before this
     function is called. This function does not make
     authorization decisions.
+
+    Duplicate references to the same document chunk are
+    removed while preserving retrieval order.
     """
 
-    if not chunks:
+    unique_chunks = deduplicate_chunks(chunks)
+
+    if not unique_chunks:
         return ContextResult(
             text="",
             sources=[],
@@ -37,7 +72,7 @@ def build_context(
     context_parts = []
     sources = []
 
-    for chunk in chunks:
+    for chunk in unique_chunks:
         context_parts.append(
             (
                 f"[Source: {chunk.filename}, "
