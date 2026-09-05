@@ -17,6 +17,7 @@ from app.schemas.document import (
     DocumentCreate,
     DocumentResponse,
 )
+from app.services.audit import record_audit_event
 from app.services.document_service import (
     create_document,
     get_document_for_user,
@@ -85,6 +86,21 @@ async def upload_document(
         document.id
     )
 
+    record_audit_event(
+        db,
+        user=current_user,
+        action="document_upload",
+        resource_type="document",
+        resource_id=document.id,
+        department_id=(
+            parsed_department_ids[0]
+            if len(parsed_department_ids) == 1
+            else None
+        ),
+    )
+
+    db.commit()
+
     return DocumentResponse(
         id=document.id,
         filename=document.filename,
@@ -108,11 +124,37 @@ def get_document_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    document = get_document_for_user(
-        db=db,
-        document_id=document_id,
-        current_user=current_user,
+    try:
+        document = get_document_for_user(
+            db=db,
+            document_id=document_id,
+            current_user=current_user,
+        )
+    except HTTPException:
+        record_audit_event(
+            db,
+            user=current_user,
+            action="document_access",
+            resource_type="document",
+            resource_id=document_id,
+            department_id=current_user.department_id,
+            success=False,
+        )
+
+        db.commit()
+
+        raise
+
+    record_audit_event(
+        db,
+        user=current_user,
+        action="document_access",
+        resource_type="document",
+        resource_id=document.id,
+        department_id=current_user.department_id,
     )
+
+    db.commit()
 
     return DocumentResponse(
         id=document.id,

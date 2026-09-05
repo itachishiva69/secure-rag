@@ -2,8 +2,10 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
+from app.db.database import get_db
 from app.models import User
 from app.rag.reranker import (
     Reranker,
@@ -16,6 +18,7 @@ from app.schemas.query import (
     RetrievedChunk,
     RetrievalRequest,
 )
+from app.services.audit import record_audit_event
 from app.services.context import build_context
 from app.services.generation import GenerationService
 from app.services.llm_provider import (
@@ -68,6 +71,7 @@ def get_query_reranker() -> Reranker:
 )
 def query_documents(
     request: RetrievalRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     reranker: Reranker = Depends(get_query_reranker),
 ):
@@ -185,6 +189,16 @@ def query_documents(
         )
         for source in context.sources
     ]
+
+    record_audit_event(
+        db,
+        user=current_user,
+        action="query",
+        resource_type="query",
+        department_id=current_user.department_id,
+    )
+
+    db.commit()
 
     logger.info(
         "query_completed",
