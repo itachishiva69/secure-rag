@@ -18,7 +18,10 @@ def test_build_context_from_single_chunk():
         )
     ]
 
-    result = build_context(chunks)
+    result = build_context(
+        chunks,
+        max_chars=1000,
+    )
 
     assert isinstance(result, ContextResult)
 
@@ -61,7 +64,10 @@ def test_build_context_preserves_chunk_order():
         ),
     ]
 
-    result = build_context(chunks)
+    result = build_context(
+        chunks,
+        max_chars=1000,
+    )
 
     assert result.text == (
         "[Source: policy.txt, chunk 0]\n"
@@ -92,7 +98,10 @@ def test_build_context_preserves_chunk_order():
 
 
 def test_build_context_with_no_chunks():
-    result = build_context([])
+    result = build_context(
+        [],
+        max_chars=1000,
+    )
 
     assert result.text == ""
     assert result.sources == []
@@ -109,7 +118,10 @@ def test_build_context_does_not_include_department_ids():
         )
     ]
 
-    result = build_context(chunks)
+    result = build_context(
+        chunks,
+        max_chars=1000,
+    )
 
     assert "10" not in result.text
     assert "department_ids" not in result.text
@@ -177,3 +189,125 @@ def test_deduplicate_chunks_preserves_identical_text_from_different_documents():
     result = deduplicate_chunks(chunks)
 
     assert result == chunks
+
+
+def test_build_context_respects_character_budget():
+    chunks = [
+        RetrievedChunk(
+            document_id=1,
+            filename="policy.txt",
+            chunk_index=0,
+            department_ids=[10],
+            text="First chunk.",
+        ),
+        RetrievedChunk(
+            document_id=1,
+            filename="policy.txt",
+            chunk_index=1,
+            department_ids=[10],
+            text="Second chunk.",
+        ),
+    ]
+
+    first_part = (
+        "[Source: policy.txt, chunk 0]\n"
+        "First chunk."
+    )
+
+    result = build_context(
+        chunks,
+        max_chars=len(first_part),
+    )
+
+    assert result.text == first_part
+
+    assert result.sources == [
+        ContextSource(
+            document_id=1,
+            filename="policy.txt",
+            chunk_index=0,
+        )
+    ]
+
+
+def test_build_context_never_splits_a_chunk():
+    chunks = [
+        RetrievedChunk(
+            document_id=1,
+            filename="policy.txt",
+            chunk_index=0,
+            department_ids=[10],
+            text="This entire chunk must remain intact.",
+        )
+    ]
+
+    result = build_context(
+        chunks,
+        max_chars=20,
+    )
+
+    assert result.text == ""
+    assert result.sources == []
+
+
+def test_build_context_preserves_rank_order_when_budget_is_reached():
+    chunks = [
+        RetrievedChunk(
+            document_id=1,
+            filename="first.txt",
+            chunk_index=0,
+            department_ids=[10],
+            text="Highest ranked result.",
+        ),
+        RetrievedChunk(
+            document_id=2,
+            filename="second.txt",
+            chunk_index=0,
+            department_ids=[10],
+            text="Lower ranked result.",
+        ),
+    ]
+
+    first_part = (
+        "[Source: first.txt, chunk 0]\n"
+        "Highest ranked result."
+    )
+
+    result = build_context(
+        chunks,
+        max_chars=len(first_part),
+    )
+
+    assert result.text == first_part
+
+    assert result.sources == [
+        ContextSource(
+            document_id=1,
+            filename="first.txt",
+            chunk_index=0,
+        )
+    ]
+
+
+def test_build_context_rejects_non_positive_budget():
+    chunks = [
+        RetrievedChunk(
+            document_id=1,
+            filename="policy.txt",
+            chunk_index=0,
+            department_ids=[10],
+            text="Policy information.",
+        )
+    ]
+
+    for max_chars in [0, -1]:
+        try:
+            build_context(
+                chunks,
+                max_chars=max_chars,
+            )
+            assert False, "Expected ValueError"
+        except ValueError as exc:
+            assert str(exc) == (
+                "max_chars must be greater than zero"
+            )

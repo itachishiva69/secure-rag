@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     )
     llm_timeout_seconds: float = 30.0
 
+    context_max_chars: int = 12000
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from app.core.config import get_settings
 from app.schemas.query import RetrievedChunk
 
 
@@ -48,6 +49,7 @@ def deduplicate_chunks(
 
 def build_context(
     chunks: list[RetrievedChunk],
+    max_chars: int | None = None,
 ) -> ContextResult:
     """
     Build the context that will eventually be supplied
@@ -59,7 +61,18 @@ def build_context(
 
     Duplicate references to the same document chunk are
     removed while preserving retrieval order.
+
+    Complete chunks are included until max_chars is reached.
+    A chunk is never split or truncated.
     """
+
+    if max_chars is None:
+        max_chars = get_settings().context_max_chars
+
+    if max_chars <= 0:
+        raise ValueError(
+            "max_chars must be greater than zero"
+        )
 
     unique_chunks = deduplicate_chunks(chunks)
 
@@ -69,17 +82,26 @@ def build_context(
             sources=[],
         )
 
-    context_parts = []
-    sources = []
+    context_parts: list[str] = []
+    sources: list[ContextSource] = []
+    current_chars = 0
 
     for chunk in unique_chunks:
-        context_parts.append(
-            (
-                f"[Source: {chunk.filename}, "
-                f"chunk {chunk.chunk_index}]\n"
-                f"{chunk.text}"
-            )
+        context_part = (
+            f"[Source: {chunk.filename}, "
+            f"chunk {chunk.chunk_index}]\n"
+            f"{chunk.text}"
         )
+
+        separator_chars = 2 if context_parts else 0
+        required_chars = (
+            separator_chars + len(context_part)
+        )
+
+        if current_chars + required_chars > max_chars:
+            break
+
+        context_parts.append(context_part)
 
         sources.append(
             ContextSource(
@@ -88,6 +110,8 @@ def build_context(
                 chunk_index=chunk.chunk_index,
             )
         )
+
+        current_chars += required_chars
 
     return ContextResult(
         text="\n\n".join(context_parts),
