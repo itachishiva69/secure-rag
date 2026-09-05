@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 INGEST_DOCUMENT_EVENT = "ingest_document"
+
 OUTBOX_PENDING = "pending"
 OUTBOX_DISPATCHED = "dispatched"
 
@@ -23,6 +24,27 @@ def create_ingestion_outbox_event(
     *,
     document_id: int,
 ) -> OutboxEvent:
+    existing_event = (
+        db.query(OutboxEvent)
+        .filter(
+            and_(
+                OutboxEvent.document_id
+                == document_id,
+                OutboxEvent.event_type
+                == INGEST_DOCUMENT_EVENT,
+                OutboxEvent.status
+                == OUTBOX_PENDING,
+            )
+        )
+        .order_by(
+            OutboxEvent.id.desc()
+        )
+        .first()
+    )
+
+    if existing_event is not None:
+        return existing_event
+
     event = OutboxEvent(
         event_type=INGEST_DOCUMENT_EVENT,
         document_id=document_id,
@@ -102,7 +124,8 @@ def dispatch_pending_outbox_events(
                 enqueue_ingestion_job(
                     document_id=event.document_id,
                     job_id=(
-                        f"document-ingestion-outbox-{event.id}"
+                        f"document-ingestion-outbox-"
+                        f"{event.id}"
                     ),
                 )
 
