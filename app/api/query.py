@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import ValidationError
 
 from app.api.dependencies import get_current_user
 from app.models import User
@@ -23,6 +24,25 @@ router = APIRouter(
 )
 
 
+def parse_retrieved_chunk(
+    payload: dict,
+) -> RetrievedChunk | None:
+    """
+    Validate a raw Qdrant payload before it enters
+    the application context or reaches the LLM.
+
+    Invalid payloads are ignored rather than causing
+    the entire query request to fail.
+    """
+
+    try:
+        return RetrievedChunk.model_validate(
+            payload
+        )
+    except ValidationError:
+        return None
+
+
 @router.post(
     "/",
     response_model=QueryResponse,
@@ -43,15 +63,14 @@ def query_documents(
         for result in results.points:
             payload = result.payload or {}
 
-            chunks.append(
-                RetrievedChunk(
-                    document_id=payload["document_id"],
-                    filename=payload["filename"],
-                    chunk_index=payload["chunk_index"],
-                    department_ids=payload["department_ids"],
-                    text=payload["text"],
-                )
+            chunk = parse_retrieved_chunk(
+                payload
             )
+
+            if chunk is None:
+                continue
+
+            chunks.append(chunk)
 
     context = build_context(chunks)
 
@@ -72,7 +91,10 @@ def query_documents(
     except LLMProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The language model provider is temporarily unavailable.",
+            detail=(
+                "The language model provider is "
+                "temporarily unavailable."
+            ),
         ) from exc
 
     sources = [
