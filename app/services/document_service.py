@@ -9,6 +9,7 @@ from app.models import (
 from app.models.document_status import DocumentStatus
 from app.models.enums import UserRole
 from app.models import User
+from app.rag.qdrant_store import delete_document_vectors
 from app.schemas.document import DocumentCreate
 
 
@@ -95,6 +96,7 @@ def get_document_for_user(
             )
             .first()
         )
+
     else:
         if current_user.department_id is None:
             raise HTTPException(
@@ -122,6 +124,14 @@ def get_document_for_user(
             detail="Document not found",
         )
 
+    if document.status == (
+        DocumentStatus.DELETING
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
     return document
 
 
@@ -133,9 +143,22 @@ def list_documents_for_user(
     offset: int,
 ) -> tuple[list[Document], int]:
     if current_user.role == UserRole.ADMIN:
-        base_query = db.query(Document)
-        count_query = db.query(
-            func.count(Document.id)
+        base_query = (
+            db.query(Document)
+            .filter(
+                Document.status
+                != DocumentStatus.DELETING
+            )
+        )
+
+        count_query = (
+            db.query(
+                func.count(Document.id)
+            )
+            .filter(
+                Document.status
+                != DocumentStatus.DELETING
+            )
         )
 
     else:
@@ -146,8 +169,12 @@ def list_documents_for_user(
             db.query(Document)
             .join(Document.departments)
             .filter(
-                Department.id
-                == current_user.department_id
+                and_(
+                    Department.id
+                    == current_user.department_id,
+                    Document.status
+                    != DocumentStatus.DELETING,
+                )
             )
             .distinct()
         )
@@ -162,8 +189,12 @@ def list_documents_for_user(
             )
             .join(Document.departments)
             .filter(
-                Department.id
-                == current_user.department_id
+                and_(
+                    Department.id
+                    == current_user.department_id,
+                    Document.status
+                    != DocumentStatus.DELETING,
+                )
             )
         )
 
@@ -224,6 +255,16 @@ def update_document_departments(
             detail="Document not found",
         )
 
+    if document.status == (
+        DocumentStatus.DELETING
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Document deletion is already in progress"
+            ),
+        )
+
     departments = (
         db.query(Department)
         .filter(
@@ -256,11 +297,11 @@ def update_document_departments(
 
     document.departments = departments
 
-    # Make sure a later ingestion attempt cannot expose
-    # a stale processing timestamp.
     document.processing_started_at = None
 
-    if document.status != DocumentStatus.PROCESSING:
+    if document.status != (
+        DocumentStatus.PROCESSING
+    ):
         document.status = (
             DocumentStatus.UPLOADED
         )
@@ -316,9 +357,86 @@ def prepare_document_reindex(
             ),
         )
 
+    if document.status == (
+        DocumentStatus.DELETING
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Document deletion is already in progress"
+            ),
+        )
+
     document.status = (
         DocumentStatus.UPLOADED
     )
+
+    document.processing_started_at = None
+
+    db.flush()
+
+    return document
+
+
+def prepare_document_delete(
+    db: Session,
+    *,
+    document_id: int,
+    current_user: User,
+) -> Document:
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id
+            == document_id
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    if document.status == (
+        DocumentStatus.PROCESSING
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Document ingestion is currently in progress"
+            ),
+        )
+
+    if document.status == (
+        DocumentStatus.DELETING
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Document deletion is already in progress"
+            ),
+        )
+
+    # Qdrant is part of the retrieval security boundary.
+    # Delete the vectors before making the deletion state
+    # durable in PostgreSQL.
+    delete_document_vectors(
+        document.id
+    )
+
+    document.status = (
+        DocumentStatus.DELETING
+    )
+
     document.processing_started_at = None
 
     db.flush()

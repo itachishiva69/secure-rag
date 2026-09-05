@@ -6,3 +6,4 @@ class DocumentStatus(str, Enum):
     PROCESSING = "processing"
     INDEXED = "indexed"
     FAILED = "failed"
+    DELETING = "deleting"

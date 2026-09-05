@@ -18,6 +18,17 @@ INGESTION_RETRY_INTERVALS = [
 ]
 
 
+CLEANUP_RETRY_MAX = 5
+
+CLEANUP_RETRY_INTERVALS = [
+    30,
+    120,
+    300,
+    600,
+    1200,
+]
+
+
 INGESTION_QUEUE_NAME = "document-ingestion"
 MAINTENANCE_QUEUE_NAME = "document-maintenance"
 
@@ -66,6 +77,31 @@ def enqueue_ingestion_job(
 
     return queue.enqueue(
         "app.services.jobs.ingest_document_job",
+        document_id,
+        **enqueue_options,
+    )
+
+
+def enqueue_cleanup_job(
+    document_id: int,
+    *,
+    job_id: str | None = None,
+):
+    queue = get_maintenance_queue()
+
+    enqueue_options = {
+        "retry": Retry(
+            max=CLEANUP_RETRY_MAX,
+            interval=CLEANUP_RETRY_INTERVALS,
+        ),
+    }
+
+    if job_id is not None:
+        enqueue_options["job_id"] = job_id
+        enqueue_options["unique"] = True
+
+    return queue.enqueue(
+        "app.services.jobs.delete_document_job",
         document_id,
         **enqueue_options,
     )

@@ -5,13 +5,17 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.models import OutboxEvent
-from app.services.queue import enqueue_ingestion_job
+from app.services.queue import (
+    enqueue_cleanup_job,
+    enqueue_ingestion_job,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
 INGEST_DOCUMENT_EVENT = "ingest_document"
+DELETE_DOCUMENT_EVENT = "delete_document"
 
 OUTBOX_PENDING = "pending"
 OUTBOX_DISPATCHED = "dispatched"
@@ -47,6 +51,45 @@ def create_ingestion_outbox_event(
 
     event = OutboxEvent(
         event_type=INGEST_DOCUMENT_EVENT,
+        document_id=document_id,
+        status=OUTBOX_PENDING,
+        attempts=0,
+    )
+
+    db.add(event)
+    db.flush()
+
+    return event
+
+
+def create_delete_outbox_event(
+    db: Session,
+    *,
+    document_id: int,
+) -> OutboxEvent:
+    existing_event = (
+        db.query(OutboxEvent)
+        .filter(
+            and_(
+                OutboxEvent.document_id
+                == document_id,
+                OutboxEvent.event_type
+                == DELETE_DOCUMENT_EVENT,
+                OutboxEvent.status
+                == OUTBOX_PENDING,
+            )
+        )
+        .order_by(
+            OutboxEvent.id.desc()
+        )
+        .first()
+    )
+
+    if existing_event is not None:
+        return existing_event
+
+    event = OutboxEvent(
+        event_type=DELETE_DOCUMENT_EVENT,
         document_id=document_id,
         status=OUTBOX_PENDING,
         attempts=0,
@@ -129,6 +172,17 @@ def dispatch_pending_outbox_events(
                     ),
                 )
 
+            elif event.event_type == (
+                DELETE_DOCUMENT_EVENT
+            ):
+                enqueue_cleanup_job(
+                    document_id=event.document_id,
+                    job_id=(
+                        f"document-cleanup-outbox-"
+                        f"{event.id}"
+                    ),
+                )
+
             else:
                 raise ValueError(
                     f"Unsupported outbox event type: "
@@ -139,7 +193,9 @@ def dispatch_pending_outbox_events(
                 OUTBOX_DISPATCHED
             )
             event.dispatched_at = (
-                datetime.now(timezone.utc)
+                datetime.now(
+                    timezone.utc
+                )
             )
             event.last_error = None
 
@@ -160,7 +216,9 @@ def dispatch_pending_outbox_events(
             )
 
             event.available_at = (
-                datetime.now(timezone.utc)
+                datetime.now(
+                    timezone.utc
+                )
                 + timedelta(
                     seconds=DISPATCH_RETRY_SECONDS
                 )

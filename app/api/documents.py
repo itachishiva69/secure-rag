@@ -28,6 +28,7 @@ from app.services.document_service import (
     create_document,
     get_document_for_user,
     list_documents_for_user,
+    prepare_document_delete,
     prepare_document_reindex,
     update_document_departments,
 )
@@ -35,6 +36,7 @@ from app.services.file_storage import (
     save_uploaded_file,
 )
 from app.services.outbox import (
+    create_delete_outbox_event,
     create_ingestion_outbox_event,
 )
 from app.services.rate_limit import (
@@ -476,7 +478,73 @@ def reindex_document_endpoint(
             status_code=(
                 status.HTTP_500_INTERNAL_SERVER_ERROR
             ),
-            detail="Failed to schedule document reindex",
+            detail=(
+                "Failed to schedule document reindex"
+            ),
+        ) from exc
+
+    return build_document_response(
+        document
+    )
+
+
+@router.delete(
+    "/{document_id}",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=DocumentResponse,
+)
+def delete_document_endpoint(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        get_current_user
+    ),
+):
+    try:
+        document = prepare_document_delete(
+            db=db,
+            document_id=document_id,
+            current_user=current_user,
+        )
+
+        create_delete_outbox_event(
+            db=db,
+            document_id=document.id,
+        )
+
+        record_audit_event(
+            db,
+            user=current_user,
+            action="document_delete",
+            resource_type="document",
+            resource_id=document.id,
+            department_id=(
+                document.departments[0].id
+                if len(
+                    document.departments
+                ) == 1
+                else None
+            ),
+            success=True,
+        )
+
+        db.commit()
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "Document deletion could not be completed safely. "
+                "Please try again."
+            ),
         ) from exc
 
     return build_document_response(

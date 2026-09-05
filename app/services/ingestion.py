@@ -20,9 +20,14 @@ def ingest_document(
     db: Session,
     document_id: int,
 ) -> int:
-    document = db.get(
-        Document,
-        document_id,
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id
+            == document_id
+        )
+        .with_for_update()
+        .first()
     )
 
     if document is None:
@@ -30,10 +35,29 @@ def ingest_document(
             f"Document {document_id} not found"
         )
 
-    document.status = DocumentStatus.PROCESSING
-    document.processing_started_at = datetime.now(
-        timezone.utc
+    if document.status == (
+        DocumentStatus.DELETING
+    ):
+        # A deletion request won the race.
+        # Treat the ingestion request as successfully
+        # cancelled rather than indexing a deleted document.
+        return 0
+
+    if document.status == (
+        DocumentStatus.PROCESSING
+    ):
+        raise ValueError(
+            f"Document {document_id} is already processing"
+        )
+
+    document.status = (
+        DocumentStatus.PROCESSING
     )
+
+    document.processing_started_at = (
+        datetime.now(timezone.utc)
+    )
+
     db.commit()
 
     try:
@@ -41,14 +65,18 @@ def ingest_document(
             document.storage_path
         )
 
-        text = normalize_text(text)
+        text = normalize_text(
+            text
+        )
 
         if not text:
             raise ValueError(
                 "Document contains no extractable text"
             )
 
-        chunks = split_text(text)
+        chunks = split_text(
+            text
+        )
 
         if not chunks:
             raise ValueError(
@@ -57,7 +85,8 @@ def ingest_document(
 
         department_ids = [
             department.id
-            for department in document.departments
+            for department
+            in document.departments
         ]
 
         if not department_ids:
@@ -67,9 +96,6 @@ def ingest_document(
 
         ensure_collection()
 
-        # Remove any previous index before creating the
-        # new version. This prevents stale chunks from
-        # surviving a successful re-index.
         delete_document_vectors(
             document.id
         )
@@ -81,28 +107,33 @@ def ingest_document(
             department_ids=department_ids,
         )
 
-        document.status = DocumentStatus.INDEXED
-        document.processing_started_at = None
+        document.status = (
+            DocumentStatus.INDEXED
+        )
+
+        document.processing_started_at = (
+            None
+        )
 
         db.commit()
 
         return indexed_count
 
     except Exception:
-        # A failure after partial Qdrant writes must not
-        # leave an incomplete or stale index behind.
         try:
             delete_document_vectors(
                 document.id
             )
         except Exception:
-            # The original ingestion error is more useful
-            # to the caller than a cleanup error. The document
-            # will still be marked FAILED below.
             pass
 
-        document.status = DocumentStatus.FAILED
-        document.processing_started_at = None
+        document.status = (
+            DocumentStatus.FAILED
+        )
+
+        document.processing_started_at = (
+            None
+        )
 
         db.commit()
 
