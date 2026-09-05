@@ -74,6 +74,16 @@ def create_test_data(db_session):
 
     db_session.flush()
 
+    finance_document.departments = [
+        finance
+    ]
+
+    engineering_document.departments = [
+        engineering
+    ]
+
+    db_session.flush()
+
     return (
         finance_user,
         engineering_user,
@@ -99,16 +109,19 @@ def test_query_sends_only_authorized_context_to_llm(
 
     def fake_retrieve_documents(
         *,
+        db,
         query,
         current_user,
         limit,
         reranker,
     ):
+        captured["db"] = db
         captured["query"] = query
         captured["current_user"] = current_user
         captured["limit"] = limit
         captured["reranker"] = reranker
 
+        assert db is db_session
         assert current_user.id == finance_user.id
         assert reranker is fake_reranker
 
@@ -204,6 +217,8 @@ def test_query_sends_only_authorized_context_to_llm(
                 "chunk_index": 0,
             }
         ]
+
+        assert captured["db"] is db_session
 
         assert captured["query"] == (
             "What is the finance budget policy?"

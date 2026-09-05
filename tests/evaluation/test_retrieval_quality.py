@@ -236,6 +236,11 @@ def create_evaluation_data(db_session):
     db_session.add_all(documents)
     db_session.flush()
 
+    for document in documents:
+        document.departments = [department]
+
+    db_session.flush()
+
     return user, department, documents
 
 
@@ -314,6 +319,7 @@ def test_candidate_retrieval_returns_relevant_chunk(
         )
 
         results = retrieve_documents(
+            db=db_session,
             query=query,
             current_user=user,
             limit=10,
@@ -367,7 +373,9 @@ def test_candidate_retrieval_baseline(
 
     reciprocal_ranks = []
 
-    total_queries = len(PARAPHRASED_QUERIES)
+    total_queries = len(
+        PARAPHRASED_QUERIES
+    )
 
     try:
         indexed_document_ids = index_evaluation_documents(
@@ -381,6 +389,7 @@ def test_candidate_retrieval_baseline(
             expected_chunk_index,
         ) in PARAPHRASED_QUERIES:
             results = retrieve_documents(
+                db=db_session,
                 query=query,
                 current_user=user,
                 limit=10,
@@ -484,6 +493,7 @@ def test_candidate_retrieval_respects_department_authorization(
         )
 
         results = retrieve_documents(
+            db=db_session,
             query=(
                 "How does the system verify a user's "
                 "authentication token?"

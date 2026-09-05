@@ -152,6 +152,7 @@ def query_documents(
 
     try:
         results = retrieve_documents(
+            db=db,
             query=request.query,
             current_user=current_user,
             limit=request.limit,

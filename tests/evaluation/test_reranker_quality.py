@@ -90,6 +90,7 @@ def test_reranker_paraphrased_query_quality(
         )
 
         results = retrieve_documents(
+            db=db_session,
             query=query,
             current_user=user,
             limit=10,

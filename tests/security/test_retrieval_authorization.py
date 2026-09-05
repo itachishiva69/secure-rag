@@ -5,7 +5,9 @@ from app.models.enums import UserRole
 from app.services.retrieval import retrieve_documents
 
 
-def test_user_retrieval_is_filtered_by_department():
+def test_user_retrieval_is_filtered_by_department(
+    db_session,
+):
     user = SimpleNamespace(
         role=UserRole.USER,
         department_id=3,
@@ -14,10 +16,10 @@ def test_user_retrieval_is_filtered_by_department():
     with patch(
         "app.services.retrieval.search"
     ) as mock_search:
-
         mock_search.return_value = None
 
         retrieve_documents(
+            db=db_session,
             query="How does authentication work?",
             current_user=user,
             limit=5,
@@ -30,7 +32,9 @@ def test_user_retrieval_is_filtered_by_department():
         )
 
 
-def test_user_without_department_gets_no_department_access():
+def test_user_without_department_gets_no_department_access(
+    db_session,
+):
     user = SimpleNamespace(
         role=UserRole.USER,
         department_id=None,
@@ -39,8 +43,8 @@ def test_user_without_department_gets_no_department_access():
     with patch(
         "app.services.retrieval.search"
     ) as mock_search:
-
         result = retrieve_documents(
+            db=db_session,
             query="confidential information",
             current_user=user,
             limit=5,
@@ -51,7 +55,9 @@ def test_user_without_department_gets_no_department_access():
         mock_search.assert_not_called()
 
 
-def test_admin_retrieval_is_unrestricted():
+def test_admin_retrieval_is_unrestricted(
+    db_session,
+):
     user = SimpleNamespace(
         role=UserRole.ADMIN,
         department_id=None,
@@ -60,10 +66,10 @@ def test_admin_retrieval_is_unrestricted():
     with patch(
         "app.services.retrieval.search"
     ) as mock_search:
-
         mock_search.return_value = None
 
         retrieve_documents(
+            db=db_session,
             query="company information",
             current_user=user,
             limit=5,

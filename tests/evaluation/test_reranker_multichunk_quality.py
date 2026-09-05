@@ -89,6 +89,7 @@ def test_reranker_multichunk_quality(
         )
 
         results = retrieve_documents(
+            db=db_session,
             query=query,
             current_user=user,
             limit=5,

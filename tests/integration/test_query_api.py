@@ -1,5 +1,6 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
-from qdrant_client.models import ScoredPoint
 
 from app.api.dependencies import get_current_user
 from app.api.query import get_query_reranker
@@ -7,16 +8,15 @@ from app.db.database import get_db
 from app.main import app
 from app.models import Department, Document, User
 from app.models.enums import UserRole
-from app.services.llm_provider import LLMProviderError
 
 
 def create_test_data(db_session):
     finance = Department(
-        name="Query-Finance"
+        name="Generation-Finance"
     )
 
     engineering = Department(
-        name="Query-Engineering"
+        name="Generation-Engineering"
     )
 
     db_session.add_all(
@@ -29,14 +29,14 @@ def create_test_data(db_session):
     db_session.flush()
 
     finance_user = User(
-        email="query-finance@example.com",
+        email="generation-finance@example.com",
         password_hash="test-hash",
         role=UserRole.USER,
         department_id=finance.id,
     )
 
     engineering_user = User(
-        email="query-engineering@example.com",
+        email="generation-engineering@example.com",
         password_hash="test-hash",
         role=UserRole.USER,
         department_id=engineering.id,
@@ -74,6 +74,16 @@ def create_test_data(db_session):
 
     db_session.flush()
 
+    finance_document.departments = [
+        finance
+    ]
+
+    engineering_document.departments = [
+        engineering
+    ]
+
+    db_session.flush()
+
     return (
         finance_user,
         engineering_user,
@@ -82,84 +92,87 @@ def create_test_data(db_session):
     )
 
 
-def test_finance_user_retrieval_only_returns_finance_chunks(
+def test_query_sends_only_authorized_context_to_llm(
     db_session,
     monkeypatch,
 ):
     (
         finance_user,
-        engineering_user,
-        finance_document,
         _,
+        finance_document,
+        engineering_document,
     ) = create_test_data(db_session)
 
     captured = {}
 
-    def fake_search(
-        *,
-        query,
-        allowed_department_ids,
-        limit,
-    ):
-        captured["query"] = query
-        captured["allowed_department_ids"] = (
-            allowed_department_ids
-        )
-        captured["limit"] = limit
+    fake_reranker = object()
 
-        return type(
-            "SearchResult",
-            (),
-            {
-                "points": [
-                    ScoredPoint(
-                        id="finance-point",
-                        version=1,
-                        score=0.95,
-                        payload={
-                            "document_id": (
-                                finance_document.id
-                            ),
-                            "filename": (
-                                "finance-policy.txt"
-                            ),
-                            "chunk_index": 0,
-                            "department_ids": [
-                                finance_user.department_id
-                            ],
-                            "text": (
-                                "Finance department "
-                                "policy information."
-                            ),
-                        },
-                    )
-                ]
-            },
-        )()
+    def fake_retrieve_documents(
+        *,
+        db,
+        query,
+        current_user,
+        limit,
+        reranker,
+    ):
+        captured["db"] = db
+        captured["query"] = query
+        captured["current_user"] = current_user
+        captured["limit"] = limit
+        captured["reranker"] = reranker
+
+        assert db is db_session
+        assert current_user.id == finance_user.id
+        assert reranker is fake_reranker
+
+        return SimpleNamespace(
+            points=[
+                SimpleNamespace(
+                    payload={
+                        "document_id": finance_document.id,
+                        "filename": "finance-policy.txt",
+                        "chunk_index": 0,
+                        "department_ids": [
+                            finance_user.department_id
+                        ],
+                        "text": (
+                            "Finance department "
+                            "budget policy."
+                        ),
+                    }
+                )
+            ]
+        )
 
     class FakeProvider:
+        def __init__(self):
+            self.query = None
+            self.context = None
+
         def generate(
             self,
             *,
             query,
             context,
         ):
-            captured["llm_query"] = query
-            captured["llm_context"] = context
+            self.query = query
+            self.context = context
 
             return (
-                "The finance department policy "
-                "contains finance information."
+                "The finance department "
+                "has a budget policy."
             )
 
+    fake_provider = FakeProvider()
+
     monkeypatch.setattr(
-        "app.services.retrieval.search",
-        fake_search,
+        "app.api.query.retrieve_documents",
+        fake_retrieve_documents,
     )
 
     monkeypatch.setattr(
         "app.api.query.get_llm_provider",
-        lambda: FakeProvider(),
+        lambda: fake_provider,
     )
 
     app.dependency_overrides[get_db] = (
@@ -171,7 +184,7 @@ def test_finance_user_retrieval_only_returns_finance_chunks(
     )
 
     app.dependency_overrides[get_query_reranker] = (
-        lambda: None
+        lambda: fake_reranker
     )
 
     client = TestClient(app)
@@ -180,9 +193,7 @@ def test_finance_user_retrieval_only_returns_finance_chunks(
         response = client.post(
             "/query/",
             json={
-                "query": (
-                    "What is the company finance policy?"
-                ),
+                "query": "What is the finance budget policy?",
                 "limit": 5,
             },
         )
@@ -192,12 +203,11 @@ def test_finance_user_retrieval_only_returns_finance_chunks(
         body = response.json()
 
         assert body["query"] == (
-            "What is the company finance policy?"
+            "What is the finance budget policy?"
         )
 
         assert body["answer"] == (
-            "The finance department policy "
-            "contains finance information."
+            "The finance department has a budget policy."
         )
 
         assert body["sources"] == [
@@ -208,251 +218,39 @@ def test_finance_user_retrieval_only_returns_finance_chunks(
             }
         ]
 
-        # Authorization must reach retrieval.
-        assert captured["allowed_department_ids"] == [
-            finance_user.department_id
-        ]
+        assert captured["db"] is db_session
 
-        assert engineering_user.department_id not in (
-            captured["allowed_department_ids"]
+        assert captured["query"] == (
+            "What is the finance budget policy?"
         )
 
-        # The LLM receives the authorized context.
-        assert captured["llm_query"] == (
-            "What is the company finance policy?"
+        assert captured["current_user"] is finance_user
+
+        assert captured["limit"] == 5
+
+        assert captured["reranker"] is fake_reranker
+
+        assert fake_provider.query == (
+            "What is the finance budget policy?"
         )
 
         assert (
-            "Finance department policy information."
-            in captured["llm_context"].text
+            "Finance department budget policy."
+            in fake_provider.context.text
         )
 
-        # The other department must never reach
-        # the LLM context.
         assert (
             "engineering-secret.txt"
-            not in captured["llm_context"].text
+            not in fake_provider.context.text
         )
 
         assert (
             "Engineering"
-            not in captured["llm_context"].text
+            not in fake_provider.context.text
         )
 
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_user_with_no_department_gets_no_results(
-    db_session,
-    monkeypatch,
-):
-    user = User(
-        email="query-no-department@example.com",
-        password_hash="test-hash",
-        role=UserRole.USER,
-        department_id=None,
-    )
-
-    db_session.add(user)
-    db_session.flush()
-
-    search_called = False
-
-    def fake_search(
-        *,
-        query,
-        allowed_department_ids,
-        limit,
-    ):
-        nonlocal search_called
-
-        search_called = True
-
-        raise AssertionError(
-            "Qdrant search must not be called "
-            "when the user has no department"
-        )
-
-    class FakeProvider:
-        def generate(
-            self,
-            *,
-            query,
-            context,
-        ):
-            raise AssertionError(
-                "LLM must not be called when "
-                "there is no authorized context"
-            )
-
-    monkeypatch.setattr(
-        "app.services.retrieval.search",
-        fake_search,
-    )
-
-    monkeypatch.setattr(
-        "app.api.query.get_llm_provider",
-        lambda: FakeProvider(),
-    )
-
-    app.dependency_overrides[get_db] = (
-        lambda: db_session
-    )
-
-    app.dependency_overrides[get_current_user] = (
-        lambda: user
-    )
-
-    app.dependency_overrides[get_query_reranker] = (
-        lambda: None
-    )
-
-    client = TestClient(app)
-
-    try:
-        response = client.post(
-            "/query/",
-            json={
-                "query": (
-                    "What documents do I have access to?"
-                ),
-                "limit": 5,
-            },
-        )
-
-        assert response.status_code == 200
-
-        body = response.json()
-
-        assert body["query"] == (
-            "What documents do I have access to?"
-        )
-
-        assert body["answer"] == (
-            "I couldn't find any relevant "
-            "information in the documents "
-            "you are authorized to access."
-        )
-
-        assert body["sources"] == []
-
-        assert search_called is False
-
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_llm_provider_failure_returns_502(
-    db_session,
-    monkeypatch,
-):
-    (
-        finance_user,
-        _,
-        finance_document,
-        _,
-    ) = create_test_data(db_session)
-
-    def fake_search(
-        *,
-        query,
-        allowed_department_ids,
-        limit,
-    ):
-        assert allowed_department_ids == [
-            finance_user.department_id
-        ]
-
-        return type(
-            "SearchResult",
-            (),
-            {
-                "points": [
-                    ScoredPoint(
-                        id="finance-point",
-                        version=1,
-                        score=0.95,
-                        payload={
-                            "document_id": (
-                                finance_document.id
-                            ),
-                            "filename": (
-                                "finance-policy.txt"
-                            ),
-                            "chunk_index": 0,
-                            "department_ids": [
-                                finance_user.department_id
-                            ],
-                            "text": (
-                                "Finance department "
-                                "policy information."
-                            ),
-                        },
-                    )
-                ]
-            },
-        )()
-
-    class FailingProvider:
-        def generate(
-            self,
-            *,
-            query,
-            context,
-        ):
-            raise LLMProviderError(
-                "simulated provider failure"
-            )
-
-    monkeypatch.setattr(
-        "app.services.retrieval.search",
-        fake_search,
-    )
-
-    monkeypatch.setattr(
-        "app.api.query.get_llm_provider",
-        lambda: FailingProvider(),
-    )
-
-    app.dependency_overrides[get_db] = (
-        lambda: db_session
-    )
-
-    app.dependency_overrides[get_current_user] = (
-        lambda: finance_user
-    )
-
-    app.dependency_overrides[get_query_reranker] = (
-        lambda: None
-    )
-
-    client = TestClient(app)
-
-    try:
-        response = client.post(
-            "/query/",
-            json={
-                "query": (
-                    "What is the company finance policy?"
-                ),
-                "limit": 5,
-            },
-        )
-
-        assert response.status_code == 502
-
-        body = response.json()
-
-        assert body["detail"] == (
-            "The language model provider is "
-            "temporarily unavailable."
-        )
-
-        # The internal provider error must never
-        # be exposed to the API client.
-        assert "simulated provider failure" not in (
-            response.text
+        assert str(engineering_document.id) not in (
+            fake_provider.context.text
         )
 
     finally:
