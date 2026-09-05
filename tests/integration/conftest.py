@@ -3,9 +3,8 @@ import os
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-
 
 TEST_DATABASE_URL = (
     "postgresql+psycopg://"
@@ -33,7 +32,6 @@ def migrate_database():
 
     try:
         alembic_config = Config("alembic.ini")
-
         command.upgrade(
             alembic_config,
             "head",
@@ -63,7 +61,28 @@ def db_session(test_engine):
     session = session_factory()
 
     try:
+        # Start each test with a clean database.
+        #
+        # We cannot rely on session.rollback() for isolation because
+        # application services intentionally call db.commit().
+        connection.execute(
+            text(
+                """
+                TRUNCATE TABLE
+                    document_departments,
+                    documents,
+                    users,
+                    departments
+                RESTART IDENTITY
+                CASCADE
+                """
+            )
+        )
+
+        connection.commit()
+
         yield session
+
     finally:
         session.rollback()
         session.close()
