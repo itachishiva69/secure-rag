@@ -1,10 +1,26 @@
+import logging
 import logging.config
+
+from app.core.request_context import get_request_id
 
 
 LOG_FORMAT = (
     "%(asctime)s %(levelname)s "
+    "[request_id=%(request_id)s] "
     "%(name)s %(message)s"
 )
+
+
+class RequestIdFilter(logging.Filter):
+    def filter(
+        self,
+        record: logging.LogRecord,
+    ) -> bool:
+        record.request_id = (
+            get_request_id() or "-"
+        )
+
+        return True
 
 
 def configure_logging() -> None:
@@ -12,6 +28,13 @@ def configure_logging() -> None:
         {
             "version": 1,
             "disable_existing_loggers": False,
+            "filters": {
+                "request_id": {
+                    "()": (
+                        "app.core.logging.RequestIdFilter"
+                    ),
+                },
+            },
             "formatters": {
                 "default": {
                     "format": LOG_FORMAT,
@@ -19,9 +42,14 @@ def configure_logging() -> None:
             },
             "handlers": {
                 "console": {
-                    "class": "logging.StreamHandler",
+                    "class": (
+                        "logging.StreamHandler"
+                    ),
                     "formatter": "default",
-                    "stream": "ext://sys.stdout",
+                    "filters": ["request_id"],
+                    "stream": (
+                        "ext://sys.stdout"
+                    ),
                 },
             },
             "loggers": {
