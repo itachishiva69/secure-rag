@@ -1,10 +1,16 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+)
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
+from app.core.config import get_settings
 from app.db.database import get_db
 from app.models import User
 from app.rag.reranker import (
@@ -24,6 +30,12 @@ from app.services.generation import GenerationService
 from app.services.llm_provider import (
     LLMProviderError,
     get_llm_provider,
+)
+from app.services.rate_limit import (
+    RateLimitError,
+    RateLimitExceeded,
+    RateLimiter,
+    get_query_rate_limiter,
 )
 from app.services.retrieval import retrieve_documents
 
@@ -65,6 +77,57 @@ def get_query_reranker() -> Reranker:
         ) from exc
 
 
+def enforce_query_rate_limit(
+    current_user: User = Depends(get_current_user),
+    rate_limiter: RateLimiter = Depends(
+        get_query_rate_limiter
+    ),
+) -> None:
+    try:
+        rate_limiter.check(
+            subject=str(current_user.id)
+        )
+    except RateLimitExceeded as exc:
+        logger.warning(
+            "query_rate_limit_exceeded",
+            extra={
+                "user_id": current_user.id,
+                "limit": exc.limit,
+                "window_seconds": (
+                    exc.window_seconds
+                ),
+            },
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Too many requests. "
+                "Please try again later."
+            ),
+            headers={
+                "Retry-After": str(
+                    get_settings().query_rate_limit_window_seconds
+                ),
+            },
+        ) from exc
+    except RateLimitError as exc:
+        logger.exception(
+            "query_rate_limiter_unavailable",
+            extra={
+                "user_id": current_user.id,
+            },
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "The request protection service "
+                "is temporarily unavailable."
+            ),
+        ) from exc
+
+
 @router.post(
     "/",
     response_model=QueryResponse,
@@ -73,6 +136,7 @@ def query_documents(
     request: RetrievalRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _: None = Depends(enforce_query_rate_limit),
     reranker: Reranker = Depends(get_query_reranker),
 ):
     logger.info(

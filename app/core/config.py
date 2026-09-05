@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     )
     reranker_candidate_limit: int = 10
 
+    query_rate_limit_requests: int = 30
+    query_rate_limit_window_seconds: int = 60
+
     context_max_chars: int = 12000
 
     model_config = SettingsConfigDict(
