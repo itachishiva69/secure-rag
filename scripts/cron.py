@@ -30,8 +30,16 @@ def main():
         ),
     )
 
+    scheduler.register(
+        "app.services.jobs.dispatch_pending_outbox_job",
+        queue_name=MAINTENANCE_QUEUE_NAME,
+        interval=60,
+        job_timeout=120,
+    )
+
     print(
-        "Starting Secure RAG reconciliation scheduler..."
+        "Starting Secure RAG reconciliation and "
+        "outbox scheduler..."
     )
 
     scheduler.start()

@@ -48,14 +48,24 @@ def get_maintenance_queue() -> Queue:
 
 def enqueue_ingestion_job(
     document_id: int,
+    *,
+    job_id: str | None = None,
 ):
     queue = get_ingestion_queue()
+
+    enqueue_options = {
+        "retry": Retry(
+            max=INGESTION_RETRY_MAX,
+            interval=INGESTION_RETRY_INTERVALS,
+        ),
+    }
+
+    if job_id is not None:
+        enqueue_options["job_id"] = job_id
+        enqueue_options["unique"] = True
 
     return queue.enqueue(
         "app.services.jobs.ingest_document_job",
         document_id,
-        retry=Retry(
-            max=INGESTION_RETRY_MAX,
-            interval=INGESTION_RETRY_INTERVALS,
-        ),
+        **enqueue_options,
     )

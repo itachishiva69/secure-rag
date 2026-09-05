@@ -15,7 +15,6 @@ from app.api.dependencies import get_current_user
 from app.core.config import get_settings
 from app.db.database import get_db
 from app.models import User
-from app.models.document_status import DocumentStatus
 from app.models.enums import UserRole
 from app.schemas.document import (
     DocumentCreate,
@@ -29,8 +28,8 @@ from app.services.document_service import (
 from app.services.file_storage import (
     save_uploaded_file,
 )
-from app.services.queue import (
-    enqueue_ingestion_job,
+from app.services.outbox import (
+    create_ingestion_outbox_event,
 )
 from app.services.rate_limit import (
     RateLimitError,
@@ -127,7 +126,9 @@ async def upload_document(
     department_ids: str = Form(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    _: None = Depends(enforce_upload_rate_limit),
+    _: None = Depends(
+        enforce_upload_rate_limit
+    ),
 ):
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
@@ -145,16 +146,22 @@ async def upload_document(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="department_ids must contain integers",
+            detail=(
+                "department_ids must contain integers"
+            ),
         ) from exc
 
     if not parsed_department_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one department is required",
+            detail=(
+                "At least one department is required"
+            ),
         )
 
-    storage_path = await save_uploaded_file(file)
+    storage_path = await save_uploaded_file(
+        file
+    )
 
     try:
         document = create_document(
@@ -165,6 +172,11 @@ async def upload_document(
                 storage_path=storage_path,
                 department_ids=parsed_department_ids,
             ),
+        )
+
+        create_ingestion_outbox_event(
+            db=db,
+            document_id=document.id,
         )
 
         record_audit_event(
@@ -191,47 +203,10 @@ async def upload_document(
         )
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create document",
-        ) from exc
-
-    try:
-        enqueue_ingestion_job(
-            document.id
-        )
-
-    except Exception as exc:
-        db.rollback()
-
-        try:
-            document.status = DocumentStatus.FAILED
-
-            record_audit_event(
-                db,
-                user=current_user,
-                action="document_ingestion_enqueue_failed",
-                resource_type="document",
-                resource_id=document.id,
-                department_id=(
-                    parsed_department_ids[0]
-                    if len(parsed_department_ids) == 1
-                    else None
-                ),
-                success=False,
-            )
-
-            db.commit()
-
-        except Exception:
-            db.rollback()
-
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Document was saved, but ingestion "
-                "could not be scheduled. "
-                "The document has been marked as failed."
+            status_code=(
+                status.HTTP_500_INTERNAL_SERVER_ERROR
             ),
+            detail="Failed to create document",
         ) from exc
 
     return build_document_response(

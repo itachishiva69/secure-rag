@@ -1,11 +1,16 @@
 import logging
+from datetime import timedelta
 
 from app.core.config import get_settings
 from app.db.database import SessionLocal
 from app.services.ingestion import ingest_document
+from app.services.outbox import (
+    dispatch_pending_outbox_events,
+)
 from app.services.reconciliation import (
     reconcile_stale_processing_documents,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +23,8 @@ def ingest_document_job(
     """
     Background job for document ingestion.
 
-    A new database session is created for each job because
-    workers must not reuse FastAPI request-scoped sessions.
-
-    Exceptions intentionally propagate so RQ can mark the
-    job as failed and apply the configured retry policy.
+    Exceptions intentionally propagate so RQ can mark
+    the job as failed and apply the configured retry policy.
     """
 
     logger.info(
@@ -62,16 +64,11 @@ def reconcile_stale_documents_job() -> None:
     """
     Periodic maintenance job that finds ingestion attempts
     stuck in PROCESSING and requeues them.
-
-    Exceptions propagate so the maintenance job is visible
-    as failed to RQ.
     """
 
     stale_after_minutes = (
         settings.reconciliation_stale_processing_minutes
     )
-
-    from datetime import timedelta
 
     stale_after = timedelta(
         minutes=stale_after_minutes
@@ -110,6 +107,44 @@ def reconcile_stale_documents_job() -> None:
     except Exception:
         logger.exception(
             "document_reconciliation_job_failed"
+        )
+
+        raise
+
+
+def dispatch_pending_outbox_job() -> None:
+    """
+    Periodic maintenance job that publishes durable
+    PostgreSQL outbox events to RQ.
+    """
+
+    logger.info(
+        "outbox_dispatch_job_started"
+    )
+
+    try:
+        with SessionLocal() as db:
+            dispatched_ids = (
+                dispatch_pending_outbox_events(
+                    db=db
+                )
+            )
+
+        logger.info(
+            "outbox_dispatch_job_completed",
+            extra={
+                "dispatched_count": len(
+                    dispatched_ids
+                ),
+                "dispatched_outbox_event_ids": (
+                    dispatched_ids
+                ),
+            },
+        )
+
+    except Exception:
+        logger.exception(
+            "outbox_dispatch_job_failed"
         )
 
         raise

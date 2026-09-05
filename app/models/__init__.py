@@ -2,6 +2,7 @@ from app.models.audit_log import AuditLog
 from app.models.department import Department
 from app.models.document import Document
 from app.models.document_department import DocumentDepartment
+from app.models.outbox_event import OutboxEvent
 from app.models.user import User
 
 __all__ = [
@@ -9,5 +10,6 @@ __all__ = [
     "Department",
     "Document",
     "DocumentDepartment",
+    "OutboxEvent",
     "User",
 ]
