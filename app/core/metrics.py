@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 from prometheus_client import (
@@ -16,6 +17,14 @@ from app.services.queue import (
     get_ingestion_queue,
     get_maintenance_queue,
 )
+
+
+logger = logging.getLogger(
+    "app.metrics"
+)
+
+
+METRICS_COLLECTION_TIMEOUT_SECONDS = 5.0
 
 
 HTTP_REQUESTS_TOTAL = Counter(
@@ -66,6 +75,14 @@ RQ_QUEUE_DEPTH = Gauge(
     ),
 )
 
+METRICS_COLLECTIONS_TOTAL = Counter(
+    "secure_rag_metrics_collections_total",
+    "Total attempts to collect application state metrics.",
+    labelnames=(
+        "status",
+    ),
+)
+
 
 def _initialize_labeled_metrics() -> None:
     for status in DocumentStatus:
@@ -81,13 +98,21 @@ def _initialize_labeled_metrics() -> None:
             status=status,
         )
 
-    RQ_QUEUE_DEPTH.labels(
-        queue="document-ingestion",
-    )
+    for queue_name in (
+        "document-ingestion",
+        "document-maintenance",
+    ):
+        RQ_QUEUE_DEPTH.labels(
+            queue=queue_name,
+        )
 
-    RQ_QUEUE_DEPTH.labels(
-        queue="document-maintenance",
-    )
+    for status in (
+        "success",
+        "failure",
+    ):
+        METRICS_COLLECTIONS_TOTAL.labels(
+            status=status,
+        )
 
 
 _initialize_labeled_metrics()
@@ -115,6 +140,41 @@ def record_http_request(
 
 
 def collect_state_metrics() -> None:
+    started_at = datetime.now(
+        timezone.utc
+    )
+
+    try:
+        _collect_state_metrics()
+    except Exception:
+        METRICS_COLLECTIONS_TOTAL.labels(
+            status="failure",
+        ).inc()
+
+        logger.exception(
+            "metrics_state_collection_failed",
+            extra={
+                "duration_ms": round(
+                    (
+                        datetime.now(
+                            timezone.utc
+                        )
+                        - started_at
+                    ).total_seconds()
+                    * 1000,
+                    2,
+                ),
+            },
+        )
+
+        raise
+    else:
+        METRICS_COLLECTIONS_TOTAL.labels(
+            status="success",
+        ).inc()
+
+
+def _collect_state_metrics() -> None:
     now = datetime.now(
         timezone.utc
     )

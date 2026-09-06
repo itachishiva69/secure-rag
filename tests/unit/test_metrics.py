@@ -3,6 +3,7 @@ from prometheus_client import REGISTRY
 from app.core.metrics import (
     DOCUMENTS_TOTAL,
     HTTP_REQUESTS_TOTAL,
+    METRICS_COLLECTIONS_TOTAL,
     record_http_request,
 )
 
@@ -72,3 +73,18 @@ def test_secure_rag_metrics_are_registered():
         "secure_rag_rq_queue_depth"
         in metric_names
     )
+
+    assert (
+        "secure_rag_metrics_collections_total"
+        in metric_names
+    )
+
+
+def test_metrics_collection_status_labels_exist():
+    for status in (
+        "success",
+        "failure",
+    ):
+        METRICS_COLLECTIONS_TOTAL.labels(
+            status=status
+        )
