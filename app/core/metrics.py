@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -10,6 +10,7 @@ from prometheus_client import (
 )
 from sqlalchemy import func
 
+from app.core.config import get_settings
 from app.db.database import SessionLocal
 from app.models import Document, OutboxEvent
 from app.models.document_status import DocumentStatus
@@ -22,9 +23,6 @@ from app.services.queue import (
 logger = logging.getLogger(
     "app.metrics"
 )
-
-
-METRICS_COLLECTION_TIMEOUT_SECONDS = 5.0
 
 
 HTTP_REQUESTS_TOTAL = Counter(
@@ -49,17 +47,19 @@ HTTP_REQUEST_DURATION_SECONDS = Histogram(
 DOCUMENTS_TOTAL = Gauge(
     "secure_rag_documents_total",
     "Current number of documents by lifecycle status.",
-    labelnames=(
-        "status",
-    ),
+    labelnames=("status",),
+)
+
+STALE_DOCUMENTS_TOTAL = Gauge(
+    "secure_rag_stale_documents_total",
+    "Current number of documents exceeding configured stale thresholds.",
+    labelnames=("status",),
 )
 
 OUTBOX_EVENTS_TOTAL = Gauge(
     "secure_rag_outbox_events_total",
     "Current number of outbox events by status.",
-    labelnames=(
-        "status",
-    ),
+    labelnames=("status",),
 )
 
 OUTBOX_EVENTS_READY = Gauge(
@@ -67,20 +67,21 @@ OUTBOX_EVENTS_READY = Gauge(
     "Current number of pending outbox events ready for dispatch.",
 )
 
+OUTBOX_PENDING_OLDEST_AGE_SECONDS = Gauge(
+    "secure_rag_outbox_pending_oldest_age_seconds",
+    "Age in seconds of the oldest pending outbox event.",
+)
+
 RQ_QUEUE_DEPTH = Gauge(
     "secure_rag_rq_queue_depth",
     "Current number of queued RQ jobs waiting for processing.",
-    labelnames=(
-        "queue",
-    ),
+    labelnames=("queue",),
 )
 
 METRICS_COLLECTIONS_TOTAL = Counter(
     "secure_rag_metrics_collections_total",
     "Total attempts to collect application state metrics.",
-    labelnames=(
-        "status",
-    ),
+    labelnames=("status",),
 )
 
 
@@ -88,6 +89,14 @@ def _initialize_labeled_metrics() -> None:
     for status in DocumentStatus:
         DOCUMENTS_TOTAL.labels(
             status=status.value,
+        )
+
+    for status in (
+        "processing",
+        "deleting",
+    ):
+        STALE_DOCUMENTS_TOTAL.labels(
+            status=status,
         )
 
     for status in (
@@ -146,6 +155,7 @@ def collect_state_metrics() -> None:
 
     try:
         _collect_state_metrics()
+
     except Exception:
         METRICS_COLLECTIONS_TOTAL.labels(
             status="failure",
@@ -168,6 +178,7 @@ def collect_state_metrics() -> None:
         )
 
         raise
+
     else:
         METRICS_COLLECTIONS_TOTAL.labels(
             status="success",
@@ -175,8 +186,28 @@ def collect_state_metrics() -> None:
 
 
 def _collect_state_metrics() -> None:
+    settings = get_settings()
+
     now = datetime.now(
         timezone.utc
+    )
+
+    processing_cutoff = (
+        now
+        - timedelta(
+            minutes=(
+                settings.reconciliation_stale_processing_minutes
+            )
+        )
+    )
+
+    deleting_cutoff = (
+        now
+        - timedelta(
+            minutes=(
+                settings.reconciliation_stale_deleting_minutes
+            )
+        )
     )
 
     with SessionLocal() as db:
@@ -200,6 +231,46 @@ def _collect_state_metrics() -> None:
                     0,
                 )
             )
+
+        stale_processing_count = (
+            db.query(
+                Document.id
+            )
+            .filter(
+                Document.status
+                == DocumentStatus.PROCESSING,
+                Document.processing_started_at.is_not(None),
+                Document.processing_started_at
+                < processing_cutoff,
+            )
+            .count()
+        )
+
+        STALE_DOCUMENTS_TOTAL.labels(
+            status="processing",
+        ).set(
+            stale_processing_count
+        )
+
+        stale_deleting_count = (
+            db.query(
+                Document.id
+            )
+            .filter(
+                Document.status
+                == DocumentStatus.DELETING,
+                Document.deletion_started_at.is_not(None),
+                Document.deletion_started_at
+                < deleting_cutoff,
+            )
+            .count()
+        )
+
+        STALE_DOCUMENTS_TOTAL.labels(
+            status="deleting",
+        ).set(
+            stale_deleting_count
+        )
 
         outbox_counts = dict(
             db.query(
@@ -241,6 +312,43 @@ def _collect_state_metrics() -> None:
         OUTBOX_EVENTS_READY.set(
             ready_count
         )
+
+        oldest_pending = (
+            db.query(
+                func.min(
+                    OutboxEvent.created_at
+                )
+            )
+            .filter(
+                OutboxEvent.status
+                == "pending",
+            )
+            .scalar()
+        )
+
+        if oldest_pending is None:
+            OUTBOX_PENDING_OLDEST_AGE_SECONDS.set(
+                0
+            )
+        else:
+            if oldest_pending.tzinfo is None:
+                oldest_pending = (
+                    oldest_pending.replace(
+                        tzinfo=timezone.utc
+                    )
+                )
+
+            age_seconds = max(
+                0.0,
+                (
+                    now
+                    - oldest_pending
+                ).total_seconds(),
+            )
+
+            OUTBOX_PENDING_OLDEST_AGE_SECONDS.set(
+                age_seconds
+            )
 
     ingestion_queue = (
         get_ingestion_queue()

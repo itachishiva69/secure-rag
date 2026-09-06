@@ -4,6 +4,10 @@ from app.core.metrics import (
     DOCUMENTS_TOTAL,
     HTTP_REQUESTS_TOTAL,
     METRICS_COLLECTIONS_TOTAL,
+    OUTBOX_EVENTS_READY,
+    OUTBOX_PENDING_OLDEST_AGE_SECONDS,
+    RQ_QUEUE_DEPTH,
+    STALE_DOCUMENTS_TOTAL,
     record_http_request,
 )
 
@@ -42,6 +46,35 @@ def test_document_metric_has_status_label():
     )
 
 
+def test_alertable_metrics_have_initialized_labels():
+    for status in (
+        "processing",
+        "deleting",
+    ):
+        STALE_DOCUMENTS_TOTAL.labels(
+            status=status
+        )
+
+    for queue_name in (
+        "document-ingestion",
+        "document-maintenance",
+    ):
+        RQ_QUEUE_DEPTH.labels(
+            queue=queue_name
+        )
+
+    METRICS_COLLECTIONS_TOTAL.labels(
+        status="success"
+    )
+
+    METRICS_COLLECTIONS_TOTAL.labels(
+        status="failure"
+    )
+
+    OUTBOX_EVENTS_READY.set(0)
+    OUTBOX_PENDING_OLDEST_AGE_SECONDS.set(0)
+
+
 def test_secure_rag_metrics_are_registered():
     metric_names = {
         sample.name
@@ -65,7 +98,22 @@ def test_secure_rag_metrics_are_registered():
     )
 
     assert (
+        "secure_rag_stale_documents_total"
+        in metric_names
+    )
+
+    assert (
         "secure_rag_outbox_events_total"
+        in metric_names
+    )
+
+    assert (
+        "secure_rag_outbox_events_ready"
+        in metric_names
+    )
+
+    assert (
+        "secure_rag_outbox_pending_oldest_age_seconds"
         in metric_names
     )
 
@@ -78,13 +126,3 @@ def test_secure_rag_metrics_are_registered():
         "secure_rag_metrics_collections_total"
         in metric_names
     )
-
-
-def test_metrics_collection_status_labels_exist():
-    for status in (
-        "success",
-        "failure",
-    ):
-        METRICS_COLLECTIONS_TOTAL.labels(
-            status=status
-        )
