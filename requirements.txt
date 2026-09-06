@@ -35,3 +35,5 @@ pytest-asyncio
 httpx
 
 openai
+
+prometheus-client

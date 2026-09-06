@@ -10,20 +10,33 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.middleware.trustedhost import (
+    TrustedHostMiddleware,
+)
+from fastapi.responses import (
+    JSONResponse,
+    Response,
+)
 from qdrant_client import QdrantClient
 from sqlalchemy import text
 
 from app.api.auth import router as auth_router
-from app.api.departments import router as departments_router
-from app.api.documents import router as documents_router
+from app.api.departments import (
+    router as departments_router,
+)
+from app.api.documents import (
+    router as documents_router,
+)
 from app.api.query import router as query_router
 from app.api.users import router as users_router
 from app.core.config import get_settings
 from app.core.logging import (
     configure_logging,
     is_valid_request_id,
+)
+from app.core.metrics import (
+    record_http_request,
+    render_metrics,
 )
 from app.core.request_context import (
     reset_request_id,
@@ -39,17 +52,14 @@ configure_logging(
     debug=settings.debug
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(
+    "app.main"
+)
 
 
 def get_api_documentation_urls(
     app_env: str,
 ) -> dict[str, str | None]:
-    """
-    Keep interactive API documentation available outside
-    production, but disable the documentation endpoints in
-    production.
-    """
     if app_env == "production":
         return {
             "docs_url": None,
@@ -76,7 +86,9 @@ class RequestBodyLimitMiddleware:
         max_body_size: int,
     ):
         self.app = app
-        self.max_body_size = max_body_size
+        self.max_body_size = (
+            max_body_size
+        )
 
     async def __call__(
         self,
@@ -107,11 +119,16 @@ class RequestBodyLimitMiddleware:
                 declared_length = int(
                     content_length
                 )
-            except (TypeError, ValueError):
+            except (
+                TypeError,
+                ValueError,
+            ):
                 response = JSONResponse(
                     status_code=400,
                     content={
-                        "detail": "Invalid Content-Length"
+                        "detail": (
+                            "Invalid Content-Length"
+                        )
                     },
                 )
 
@@ -120,13 +137,16 @@ class RequestBodyLimitMiddleware:
                     receive,
                     send,
                 )
+
                 return
 
             if declared_length < 0:
                 response = JSONResponse(
                     status_code=400,
                     content={
-                        "detail": "Invalid Content-Length"
+                        "detail": (
+                            "Invalid Content-Length"
+                        )
                     },
                 )
 
@@ -135,9 +155,13 @@ class RequestBodyLimitMiddleware:
                     receive,
                     send,
                 )
+
                 return
 
-            if declared_length > self.max_body_size:
+            if (
+                declared_length
+                > self.max_body_size
+            ):
                 response = JSONResponse(
                     status_code=413,
                     content={
@@ -154,6 +178,7 @@ class RequestBodyLimitMiddleware:
                     receive,
                     send,
                 )
+
                 return
 
         received_size = 0
@@ -173,9 +198,14 @@ class RequestBodyLimitMiddleware:
                 b"",
             )
 
-            received_size += len(body)
+            received_size += len(
+                body
+            )
 
-            if received_size > self.max_body_size:
+            if (
+                received_size
+                > self.max_body_size
+            ):
                 raise RequestBodyTooLarge()
 
             return message
@@ -206,16 +236,24 @@ class RequestBodyLimitMiddleware:
             )
 
 
-documentation_urls = get_api_documentation_urls(
-    settings.app_env
+documentation_urls = (
+    get_api_documentation_urls(
+        settings.app_env
+    )
 )
 
 
 app = FastAPI(
     title=settings.app_name,
-    docs_url=documentation_urls["docs_url"],
-    redoc_url=documentation_urls["redoc_url"],
-    openapi_url=documentation_urls["openapi_url"],
+    docs_url=documentation_urls[
+        "docs_url"
+    ],
+    redoc_url=documentation_urls[
+        "redoc_url"
+    ],
+    openapi_url=documentation_urls[
+        "openapi_url"
+    ],
 )
 
 
@@ -226,7 +264,9 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_allowed_origins,
+    allow_origins=(
+        settings.cors_allowed_origins
+    ),
     allow_credentials=False,
     allow_methods=[
         "GET",
@@ -317,6 +357,25 @@ async def security_headers_middleware(
     return response
 
 
+def _get_metric_path(
+    request: Request,
+) -> str:
+    route = request.scope.get(
+        "route"
+    )
+
+    route_path = getattr(
+        route,
+        "path",
+        None,
+    )
+
+    if route_path:
+        return route_path
+
+    return request.url.path
+
+
 @app.middleware("http")
 async def request_id_middleware(
     request: Request,
@@ -331,9 +390,13 @@ async def request_id_middleware(
     if is_valid_request_id(
         incoming_request_id
     ):
-        request_id = incoming_request_id
+        request_id = (
+            incoming_request_id
+        )
     else:
-        request_id = str(uuid4())
+        request_id = str(
+            uuid4()
+        )
 
     request.state.request_id = (
         request_id
@@ -358,13 +421,29 @@ async def request_id_middleware(
             request
         )
 
+        duration_seconds = (
+            perf_counter()
+            - started_at
+        )
+
         duration_ms = round(
-            (
-                perf_counter()
-                - started_at
-            )
-            * 1000,
+            duration_seconds * 1000,
             2,
+        )
+
+        metric_path = (
+            _get_metric_path(
+                request
+            )
+        )
+
+        record_http_request(
+            method=request.method,
+            path=metric_path,
+            status_code=response.status_code,
+            duration_seconds=(
+                duration_seconds
+            ),
         )
 
         logger.info(
@@ -386,13 +465,29 @@ async def request_id_middleware(
         return response
 
     except Exception:
+        duration_seconds = (
+            perf_counter()
+            - started_at
+        )
+
         duration_ms = round(
-            (
-                perf_counter()
-                - started_at
-            )
-            * 1000,
+            duration_seconds * 1000,
             2,
+        )
+
+        metric_path = (
+            _get_metric_path(
+                request
+            )
+        )
+
+        record_http_request(
+            method=request.method,
+            path=metric_path,
+            status_code=500,
+            duration_seconds=(
+                duration_seconds
+            ),
         )
 
         logger.exception(
@@ -407,7 +502,9 @@ async def request_id_middleware(
         raise
 
     finally:
-        reset_request_id(token)
+        reset_request_id(
+            token
+        )
 
 
 @app.exception_handler(
@@ -437,11 +534,13 @@ async def request_validation_exception_handler(
     content = {
         "detail": jsonable_encoder(
             exc.errors()
-        ),
+        )
     }
 
     if request_id:
-        content["request_id"] = request_id
+        content["request_id"] = (
+            request_id
+        )
 
     response = JSONResponse(
         status_code=422,
@@ -483,7 +582,9 @@ async def http_exception_handler(
     }
 
     if request_id:
-        content["request_id"] = request_id
+        content["request_id"] = (
+            request_id
+        )
 
     response = JSONResponse(
         status_code=exc.status_code,
@@ -530,7 +631,9 @@ async def unhandled_exception_handler(
     response = JSONResponse(
         status_code=500,
         content={
-            "detail": "Internal server error",
+            "detail": (
+                "Internal server error"
+            ),
             "request_id": request_id,
         },
     )
@@ -583,9 +686,10 @@ def readiness():
 
     failed_dependencies = []
 
-    for dependency_name, check in (
-        dependency_checks.items()
-    ):
+    for (
+        dependency_name,
+        check,
+    ) in dependency_checks.items():
         try:
             check()
 
@@ -613,7 +717,7 @@ def readiness():
         )
 
     return {
-        "status": "ready",
+        "status": "ready"
     }
 
 
@@ -630,10 +734,40 @@ def qdrant_health():
         return JSONResponse(
             status_code=503,
             content={
-                "status": "unavailable",
+                "status": "unavailable"
             },
         )
 
     return {
-        "status": "ok",
+        "status": "ok"
     }
+
+
+@app.get(
+    "/metrics",
+    include_in_schema=False,
+)
+def metrics():
+    try:
+        payload, content_type = (
+            render_metrics()
+        )
+
+        return Response(
+            content=payload,
+            media_type=content_type,
+        )
+
+    except Exception:
+        logger.exception(
+            "metrics_collection_failed"
+        )
+
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": (
+                    "Metrics unavailable"
+                )
+            },
+        )
