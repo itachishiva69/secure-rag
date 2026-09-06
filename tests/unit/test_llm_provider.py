@@ -1,176 +1,186 @@
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
-from openai import APIError
-
-from app.services.context import (
-    ContextResult,
-    ContextSource,
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
 )
+
+from app.services.context import ContextResult
 from app.services.llm_provider import (
     LLMProviderError,
     OpenAICompatibleProvider,
 )
 
 
-def create_context():
+def make_context() -> ContextResult:
     return ContextResult(
-        text=(
-            "[Source: finance-policy.txt, chunk 0]\n"
-            "Finance department policy information."
+        text="The company has a finance policy.",
+        sources=[],
+    )
+
+
+def make_provider() -> OpenAICompatibleProvider:
+    return OpenAICompatibleProvider(
+        api_key="test-key",
+        model="test-model",
+        base_url="https://example.com/v1",
+        timeout=5.0,
+    )
+
+
+def make_response(content: str | None):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=content,
+                )
+            )
+        ]
+    )
+
+
+def test_generate_returns_stripped_content():
+    provider = make_provider()
+
+    provider.client.chat.completions.create = Mock(
+        return_value=make_response(
+            "  The finance policy applies.  "
+        )
+    )
+
+    result = provider.generate(
+        query="What is the finance policy?",
+        context=make_context(),
+    )
+
+    assert result == "The finance policy applies."
+
+
+def test_generate_rejects_empty_content():
+    provider = make_provider()
+
+    provider.client.chat.completions.create = Mock(
+        return_value=make_response("   ")
+    )
+
+    with pytest.raises(
+        LLMProviderError,
+        match="empty content",
+    ):
+        provider.generate(
+            query="What is the finance policy?",
+            context=make_context(),
+        )
+
+
+def test_generate_rejects_missing_content():
+    provider = make_provider()
+
+    provider.client.chat.completions.create = Mock(
+        return_value=make_response(None)
+    )
+
+    with pytest.raises(
+        LLMProviderError,
+        match="no content",
+    ):
+        provider.generate(
+            query="What is the finance policy?",
+            context=make_context(),
+        )
+
+
+def test_generate_rejects_missing_choices():
+    provider = make_provider()
+
+    provider.client.chat.completions.create = Mock(
+        return_value=SimpleNamespace(
+            choices=[]
+        )
+    )
+
+    with pytest.raises(
+        LLMProviderError,
+        match="no choices",
+    ):
+        provider.generate(
+            query="What is the finance policy?",
+            context=make_context(),
+        )
+
+
+@pytest.mark.parametrize(
+    "exception_factory,expected_message",
+    [
+        (
+            lambda: APITimeoutError(
+                request=Mock()
+            ),
+            "timed out",
         ),
-        sources=[
-            ContextSource(
-                document_id=1,
-                filename="finance-policy.txt",
-                chunk_index=0,
-            )
-        ],
-    )
-
-
-@patch("app.services.llm_provider.OpenAI")
-def test_provider_generates_answer(mock_openai):
-    mock_client = MagicMock()
-    mock_openai.return_value = mock_client
-
-    mock_response = MagicMock()
-    mock_response.choices = [
-        MagicMock(
-            message=MagicMock(
-                content="Generated answer."
-            )
-        )
-    ]
-
-    mock_client.chat.completions.create.return_value = (
-        mock_response
-    )
-
-    provider = OpenAICompatibleProvider(
-        api_key="test-key",
-        model="test-model",
-        base_url="https://example.com/v1",
-    )
-
-    result = provider.generate(
-        query="What is the finance policy?",
-        context=create_context(),
-    )
-
-    assert result == "Generated answer."
-
-    mock_openai.assert_called_once_with(
-        api_key="test-key",
-        base_url="https://example.com/v1",
-        timeout=30.0,
-    )
-
-    mock_client.chat.completions.create.assert_called_once()
-
-
-@patch("app.services.llm_provider.OpenAI")
-def test_provider_passes_custom_timeout(mock_openai):
-    OpenAICompatibleProvider(
-        api_key="test-key",
-        model="test-model",
-        base_url="https://example.com/v1",
-        timeout=12.5,
-    )
-
-    mock_openai.assert_called_once_with(
-        api_key="test-key",
-        base_url="https://example.com/v1",
-        timeout=12.5,
-    )
-
-
-@patch("app.services.llm_provider.OpenAI")
-def test_provider_converts_api_error_to_provider_error(
-    mock_openai,
+        (
+            lambda: APIConnectionError(
+                request=Mock()
+            ),
+            "connection failed",
+        ),
+        (
+            lambda: RateLimitError(
+                message="rate limited",
+                response=Mock(),
+                body=None,
+            ),
+            "rate limit exceeded",
+        ),
+        (
+            lambda: InternalServerError(
+                message="server error",
+                response=Mock(),
+                body=None,
+            ),
+            "server error",
+        ),
+    ],
+)
+def test_generate_maps_provider_failures(
+    exception_factory,
+    expected_message,
 ):
-    mock_client = MagicMock()
-    mock_openai.return_value = mock_client
+    provider = make_provider()
 
-    mock_client.chat.completions.create.side_effect = (
-        APIError(
-            "provider failure",
-            request=None,
-            body=None,
-        )
-    )
-
-    provider = OpenAICompatibleProvider(
-        api_key="test-key",
-        model="test-model",
-        base_url="https://example.com/v1",
+    provider.client.chat.completions.create = Mock(
+        side_effect=exception_factory()
     )
 
     with pytest.raises(
         LLMProviderError,
-        match="LLM provider request failed",
+        match=expected_message,
     ):
         provider.generate(
             query="What is the finance policy?",
-            context=create_context(),
+            context=make_context(),
         )
 
 
-@patch("app.services.llm_provider.OpenAI")
-def test_provider_rejects_response_without_choices(
-    mock_openai,
-):
-    mock_client = MagicMock()
-    mock_openai.return_value = mock_client
+def test_generate_preserves_unexpected_exceptions():
+    provider = make_provider()
 
-    mock_response = MagicMock()
-    mock_response.choices = []
-
-    mock_client.chat.completions.create.return_value = (
-        mock_response
-    )
-
-    provider = OpenAICompatibleProvider(
-        api_key="test-key",
-        model="test-model",
-        base_url="https://example.com/v1",
+    provider.client.chat.completions.create = Mock(
+        side_effect=RuntimeError(
+            "unexpected provider failure"
+        )
     )
 
     with pytest.raises(
-        LLMProviderError,
-        match="LLM provider returned no choices",
+        RuntimeError,
+        match="unexpected provider failure",
     ):
         provider.generate(
             query="What is the finance policy?",
-            context=create_context(),
+            context=make_context(),
         )
-
-
-@patch("app.services.llm_provider.OpenAI")
-def test_provider_handles_none_content(mock_openai):
-    mock_client = MagicMock()
-    mock_openai.return_value = mock_client
-
-    mock_response = MagicMock()
-    mock_response.choices = [
-        MagicMock(
-            message=MagicMock(content=None)
-        )
-    ]
-
-    mock_client.chat.completions.create.return_value = (
-        mock_response
-    )
-
-    provider = OpenAICompatibleProvider(
-        api_key="test-key",
-        model="test-model",
-        base_url="https://example.com/v1",
-    )
-
-    result = provider.generate(
-        query="What is the finance policy?",
-        context=create_context(),
-    )
-
-    assert result == ""

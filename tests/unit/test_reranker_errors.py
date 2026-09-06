@@ -9,6 +9,20 @@ from app.rag.reranker import (
 from app.schemas.query import RetrievedChunk
 
 
+def create_chunk(
+    document_id: int,
+    chunk_index: int,
+    text: str,
+):
+    return RetrievedChunk(
+        document_id=document_id,
+        filename=f"document-{document_id}.txt",
+        chunk_index=chunk_index,
+        department_ids=[1],
+        text=text,
+    )
+
+
 def test_reranker_model_load_failure_is_wrapped(
     monkeypatch,
 ):
@@ -25,14 +39,13 @@ def test_reranker_model_load_failure_is_wrapped(
         failing_cross_encoder,
     )
 
-    with pytest.raises(RerankerError) as exc_info:
+    with pytest.raises(
+        RerankerError,
+        match="Reranker model could not be loaded",
+    ):
         Reranker(
             model_name="test-model"
         )
-
-    assert str(exc_info.value) == (
-        "Reranker model could not be loaded"
-    )
 
 
 def test_reranker_inference_failure_is_wrapped():
@@ -46,59 +59,142 @@ def test_reranker_inference_failure_is_wrapped():
         )
     )
 
-    chunk = RetrievedChunk(
+    chunk = create_chunk(
         document_id=1,
-        filename="test.txt",
         chunk_index=0,
-        department_ids=[1],
         text="Test document content.",
     )
 
-    with pytest.raises(RerankerError) as exc_info:
+    with pytest.raises(
+        RerankerError,
+        match="Reranker inference failed",
+    ):
         reranker.rerank(
             query="test query",
             chunks=[chunk],
             limit=1,
         )
 
-    assert str(exc_info.value) == (
-        "Reranker inference failed"
-    )
-
 
 def test_reranker_rejects_wrong_score_count():
     reranker = object.__new__(Reranker)
 
     reranker.model = Mock()
+
     reranker.model.predict.return_value = [
-        1.0
+        1.0,
     ]
 
     chunks = [
-        RetrievedChunk(
+        create_chunk(
             document_id=1,
-            filename="test.txt",
             chunk_index=0,
-            department_ids=[1],
             text="First chunk.",
         ),
-        RetrievedChunk(
+        create_chunk(
             document_id=1,
-            filename="test.txt",
             chunk_index=1,
-            department_ids=[1],
             text="Second chunk.",
         ),
     ]
 
-    with pytest.raises(RerankerError) as exc_info:
+    with pytest.raises(
+        RerankerError,
+        match=(
+            "Reranker returned an unexpected "
+            "number of scores"
+        ),
+    ):
         reranker.rerank(
             query="test query",
             chunks=chunks,
             limit=2,
         )
 
-    assert str(exc_info.value) == (
-        "Reranker returned an unexpected "
-        "number of scores"
+
+def test_reranker_rejects_malformed_scores():
+    reranker = object.__new__(Reranker)
+
+    reranker.model = Mock()
+
+    reranker.model.predict.return_value = [
+        "not-a-number",
+    ]
+
+    chunk = create_chunk(
+        document_id=1,
+        chunk_index=0,
+        text="Test document content.",
     )
+
+    with pytest.raises(
+        RerankerError,
+        match="Reranker returned invalid scores",
+    ):
+        reranker.rerank(
+            query="test query",
+            chunks=[chunk],
+            limit=1,
+        )
+
+
+@pytest.mark.parametrize(
+    "score",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+    ],
+)
+def test_reranker_rejects_non_finite_scores(
+    score,
+):
+    reranker = object.__new__(Reranker)
+
+    reranker.model = Mock()
+
+    reranker.model.predict.return_value = [
+        score,
+    ]
+
+    chunk = create_chunk(
+        document_id=1,
+        chunk_index=0,
+        text="Test document content.",
+    )
+
+    with pytest.raises(
+        RerankerError,
+        match="Reranker returned invalid scores",
+    ):
+        reranker.rerank(
+            query="test query",
+            chunks=[chunk],
+            limit=1,
+        )
+
+
+def test_reranker_rejects_invalid_score_collection():
+    reranker = object.__new__(Reranker)
+
+    reranker.model = Mock()
+
+    reranker.model.predict.return_value = (
+        1.0
+    )
+
+    chunk = create_chunk(
+        document_id=1,
+        chunk_index=0,
+        text="Test document content.",
+    )
+
+    with pytest.raises(
+        RerankerError,
+        match="Reranker returned invalid scores",
+    ):
+        reranker.rerank(
+            query="test query",
+            chunks=[chunk],
+            limit=1,
+        )

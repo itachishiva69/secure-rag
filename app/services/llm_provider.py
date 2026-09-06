@@ -1,4 +1,11 @@
-from openai import APIError, OpenAI
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
 
 from app.core.config import get_settings
 from app.services.context import ContextResult
@@ -23,6 +30,7 @@ class OpenAICompatibleProvider:
             api_key=api_key,
             base_url=base_url,
             timeout=timeout,
+            max_retries=2,
         )
 
     def generate(
@@ -64,6 +72,27 @@ class OpenAICompatibleProvider:
                     },
                 ],
             )
+
+        except APITimeoutError as exc:
+            raise LLMProviderError(
+                "LLM provider request timed out"
+            ) from exc
+
+        except APIConnectionError as exc:
+            raise LLMProviderError(
+                "LLM provider connection failed"
+            ) from exc
+
+        except RateLimitError as exc:
+            raise LLMProviderError(
+                "LLM provider rate limit exceeded"
+            ) from exc
+
+        except InternalServerError as exc:
+            raise LLMProviderError(
+                "LLM provider server error"
+            ) from exc
+
         except APIError as exc:
             raise LLMProviderError(
                 "LLM provider request failed"
@@ -77,7 +106,16 @@ class OpenAICompatibleProvider:
         content = response.choices[0].message.content
 
         if content is None:
-            return ""
+            raise LLMProviderError(
+                "LLM provider returned no content"
+            )
+
+        content = content.strip()
+
+        if not content:
+            raise LLMProviderError(
+                "LLM provider returned empty content"
+            )
 
         return content
 

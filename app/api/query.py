@@ -1,11 +1,7 @@
 import logging
+from functools import lru_cache
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    status,
-)
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -13,6 +9,7 @@ from app.api.dependencies import get_current_user
 from app.core.config import get_settings
 from app.db.database import get_db
 from app.models import User
+from app.rag.qdrant_store import QdrantStoreError
 from app.rag.reranker import (
     Reranker,
     RerankerError,
@@ -25,7 +22,10 @@ from app.schemas.query import (
     RetrievalRequest,
 )
 from app.services.audit import record_audit_event
-from app.services.context import build_context
+from app.services.context import (
+    ContextResult,
+    build_context,
+)
 from app.services.generation import GenerationService
 from app.services.llm_provider import (
     LLMProviderError,
@@ -35,18 +35,83 @@ from app.services.rate_limit import (
     RateLimitError,
     RateLimitExceeded,
     RateLimiter,
-    get_query_rate_limiter,
+    get_redis,
 )
 from app.services.retrieval import retrieve_documents
 
 
 logger = logging.getLogger(__name__)
 
+settings = get_settings()
 
 router = APIRouter(
     prefix="/query",
     tags=["Query"],
 )
+
+
+def get_query_rate_limiter() -> RateLimiter:
+    return RateLimiter(
+        redis=get_redis(),
+        requests=settings.query_rate_limit_requests,
+        window_seconds=(
+            settings.query_rate_limit_window_seconds
+        ),
+        key_prefix="secure-rag:rate-limit:query",
+    )
+
+
+def enforce_query_rate_limit(
+    current_user: User = Depends(
+        get_current_user
+    ),
+) -> None:
+    rate_limiter = get_query_rate_limiter()
+
+    try:
+        rate_limiter.check(
+            subject=str(
+                current_user.id
+            )
+        )
+
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_429_TOO_MANY_REQUESTS
+            ),
+            detail=(
+                "Too many query requests. "
+                "Please try again later."
+            ),
+            headers={
+                "Retry-After": str(
+                    exc.window_seconds
+                ),
+            },
+        ) from exc
+
+    except RateLimitError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "The request protection service "
+                "is temporarily unavailable."
+            ),
+        ) from exc
+
+
+@lru_cache
+def get_query_reranker() -> Reranker | None:
+    try:
+        return get_reranker()
+    except RerankerError:
+        logger.exception(
+            "query_reranker_unavailable"
+        )
+        return None
 
 
 def parse_retrieved_chunk(
@@ -60,72 +125,11 @@ def parse_retrieved_chunk(
         return None
 
 
-def get_query_reranker() -> Reranker:
-    try:
-        return get_reranker()
-    except RerankerError as exc:
-        logger.exception(
-            "query_reranker_unavailable"
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "The document reranking service "
-                "is temporarily unavailable."
-            ),
-        ) from exc
-
-
-def enforce_query_rate_limit(
-    current_user: User = Depends(get_current_user),
-    rate_limiter: RateLimiter = Depends(
-        get_query_rate_limiter
-    ),
-) -> None:
-    try:
-        rate_limiter.check(
-            subject=str(current_user.id)
-        )
-    except RateLimitExceeded as exc:
-        logger.warning(
-            "query_rate_limit_exceeded",
-            extra={
-                "user_id": current_user.id,
-                "limit": exc.limit,
-                "window_seconds": (
-                    exc.window_seconds
-                ),
-            },
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=(
-                "Too many requests. "
-                "Please try again later."
-            ),
-            headers={
-                "Retry-After": str(
-                    get_settings().query_rate_limit_window_seconds
-                ),
-            },
-        ) from exc
-    except RateLimitError as exc:
-        logger.exception(
-            "query_rate_limiter_unavailable",
-            extra={
-                "user_id": current_user.id,
-            },
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "The request protection service "
-                "is temporarily unavailable."
-            ),
-        ) from exc
+def build_empty_context() -> ContextResult:
+    return ContextResult(
+        text="",
+        sources=[],
+    )
 
 
 @router.post(
@@ -135,18 +139,28 @@ def enforce_query_rate_limit(
 def query_documents(
     request: RetrievalRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    _: None = Depends(enforce_query_rate_limit),
-    reranker: Reranker = Depends(get_query_reranker),
+    current_user: User = Depends(
+        get_current_user
+    ),
+    _: None = Depends(
+        enforce_query_rate_limit
+    ),
+    reranker: Reranker | None = Depends(
+        get_query_reranker
+    ),
 ):
     logger.info(
         "query_started",
         extra={
             "user_id": current_user.id,
             "user_role": current_user.role.value,
-            "department_id": current_user.department_id,
+            "department_id": (
+                current_user.department_id
+            ),
             "requested_limit": request.limit,
-            "reranker_enabled": reranker is not None,
+            "reranker_enabled": (
+                reranker is not None
+            ),
         },
     )
 
@@ -158,6 +172,26 @@ def query_documents(
             limit=request.limit,
             reranker=reranker,
         )
+
+    except QdrantStoreError as exc:
+        logger.exception(
+            "query_qdrant_failed",
+            extra={
+                "user_id": current_user.id,
+                "requested_limit": request.limit,
+            },
+        )
+
+        raise HTTPException(
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "The document retrieval service "
+                "is temporarily unavailable."
+            ),
+        ) from exc
+
     except RerankerError as exc:
         logger.exception(
             "query_reranking_failed",
@@ -168,7 +202,9 @@ def query_documents(
         )
 
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
             detail=(
                 "The document reranking service "
                 "is temporarily unavailable."
@@ -197,7 +233,10 @@ def query_documents(
 
             chunks.append(chunk)
 
-    context = build_context(chunks)
+    if chunks:
+        context = build_context(chunks)
+    else:
+        context = build_empty_context()
 
     logger.info(
         "query_retrieval_completed",
@@ -227,6 +266,7 @@ def query_documents(
                 context=context,
             )
         )
+
     except LLMProviderError as exc:
         logger.exception(
             "query_llm_provider_failed",
@@ -239,10 +279,12 @@ def query_documents(
         )
 
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=(
+                status.HTTP_502_BAD_GATEWAY
+            ),
             detail=(
-                "The language model provider is "
-                "temporarily unavailable."
+                "The language model provider "
+                "is temporarily unavailable."
             ),
         ) from exc
 
@@ -260,7 +302,9 @@ def query_documents(
         user=current_user,
         action="query",
         resource_type="query",
-        department_id=current_user.department_id,
+        department_id=(
+            current_user.department_id
+        ),
     )
 
     db.commit()

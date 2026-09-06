@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from functools import lru_cache
+import math
 
 from sentence_transformers import CrossEncoder
 
@@ -73,22 +74,48 @@ class Reranker:
                 "Reranker inference failed"
             ) from exc
 
-        if len(scores) != len(chunks):
+        try:
+            score_count = len(scores)
+        except Exception as exc:
+            raise RerankerError(
+                "Reranker returned invalid scores"
+            ) from exc
+
+        if score_count != len(chunks):
             raise RerankerError(
                 "Reranker returned an unexpected "
                 "number of scores"
             )
 
-        ranked = [
-            RerankedChunk(
-                chunk=chunk,
-                score=float(score),
-            )
+        ranked: list[RerankedChunk] = []
+
+        try:
             for chunk, score in zip(
                 chunks,
                 scores,
-            )
-        ]
+            ):
+                numeric_score = float(score)
+
+                if not math.isfinite(
+                    numeric_score
+                ):
+                    raise ValueError(
+                        "Reranker returned a "
+                        "non-finite score"
+                    )
+
+                ranked.append(
+                    RerankedChunk(
+                        chunk=chunk,
+                        score=numeric_score,
+                    )
+                )
+        except RerankerError:
+            raise
+        except Exception as exc:
+            raise RerankerError(
+                "Reranker returned invalid scores"
+            ) from exc
 
         ranked.sort(
             key=lambda result: result.score,

@@ -1,3 +1,4 @@
+from functools import lru_cache
 from uuid import UUID, uuid5
 
 from qdrant_client import QdrantClient
@@ -28,28 +29,65 @@ UUID_NAMESPACE = UUID(
 )
 
 
-def ensure_collection() -> None:
+class QdrantStoreError(Exception):
+    """Raised when the Qdrant vector store cannot complete an operation."""
+
+
+def _qdrant_call(
+    *,
+    operation: str,
+    func,
+):
     """
-    Create the Qdrant collection if it does not already exist.
+    Execute a Qdrant client operation and convert dependency
+    failures into the application's vector-store error.
+
+    The exception details are preserved as the cause for logging,
+    while callers receive a stable application-level exception.
     """
+    try:
+        return func()
+    except Exception as exc:
+        raise QdrantStoreError(
+            f"Qdrant {operation} failed"
+        ) from exc
 
-    embedding_service = get_embedding_service()
 
-    collections = client.get_collections()
+def _collection_exists() -> bool:
+    """
+    Return whether the configured collection exists.
 
-    exists = any(
+    Only the direct Qdrant call is wrapped. Embedding/model failures
+    remain separate failures because they are not Qdrant failures.
+    """
+    collections = _qdrant_call(
+        operation="collection lookup",
+        func=client.get_collections,
+    )
+
+    return any(
         collection.name == settings.qdrant_collection
         for collection in collections.collections
     )
 
-    if exists:
+
+def ensure_collection() -> None:
+    """
+    Create the Qdrant collection if it does not already exist.
+    """
+    embedding_service = get_embedding_service()
+
+    if _collection_exists():
         return
 
-    client.create_collection(
-        collection_name=settings.qdrant_collection,
-        vectors_config=VectorParams(
-            size=embedding_service.dimension,
-            distance=Distance.COSINE,
+    _qdrant_call(
+        operation="collection creation",
+        func=lambda: client.create_collection(
+            collection_name=settings.qdrant_collection,
+            vectors_config=VectorParams(
+                size=embedding_service.dimension,
+                distance=Distance.COSINE,
+            ),
         ),
     )
 
@@ -60,29 +98,23 @@ def delete_document_vectors(
     """
     Delete all Qdrant vectors belonging to a document.
     """
-
-    # If the collection doesn't exist, there is nothing to delete.
-    collections = client.get_collections()
-
-    exists = any(
-        collection.name == settings.qdrant_collection
-        for collection in collections.collections
-    )
-
-    if not exists:
+    if not _collection_exists():
         return
 
-    client.delete(
-        collection_name=settings.qdrant_collection,
-        points_selector=Filter(
-            must=[
-                FieldCondition(
-                    key="document_id",
-                    match={
-                        "value": document_id,
-                    },
-                )
-            ]
+    _qdrant_call(
+        operation="document vector deletion",
+        func=lambda: client.delete(
+            collection_name=settings.qdrant_collection,
+            points_selector=Filter(
+                must=[
+                    FieldCondition(
+                        key="document_id",
+                        match={
+                            "value": document_id,
+                        },
+                    )
+                ]
+            ),
         ),
     )
 
@@ -102,7 +134,6 @@ def index_chunks(
 
     Re-indexing the same document therefore produces the same point IDs.
     """
-
     if not chunks:
         return 0
 
@@ -140,9 +171,12 @@ def index_chunks(
             )
         )
 
-    client.upsert(
-        collection_name=settings.qdrant_collection,
-        points=points,
+    _qdrant_call(
+        operation="chunk indexing",
+        func=lambda: client.upsert(
+            collection_name=settings.qdrant_collection,
+            points=points,
+        ),
     )
 
     return len(points)
@@ -154,14 +188,25 @@ def search(
     allowed_department_ids: list[int] | None = None,
     limit: int = 5,
 ):
-    if allowed_department_ids is not None and not allowed_department_ids:
+    """
+    Search Qdrant using the supplied department authorization filter.
+
+    An empty authorization list means no accessible departments and
+    therefore must not contact Qdrant at all.
+    """
+    if (
+        allowed_department_ids is not None
+        and not allowed_department_ids
+    ):
         return []
 
     ensure_collection()
 
     embedding_service = get_embedding_service()
 
-    query_vector = embedding_service.embed_query(query)
+    query_vector = embedding_service.embed_query(
+        query
+    )
 
     query_filter = None
 
@@ -177,10 +222,20 @@ def search(
             ]
         )
 
-    return client.query_points(
-        collection_name=settings.qdrant_collection,
-        query=query_vector,
-        query_filter=query_filter,
-        limit=limit,
-        with_payload=True,
+    results = _qdrant_call(
+        operation="search",
+        func=lambda: client.query_points(
+            collection_name=settings.qdrant_collection,
+            query=query_vector,
+            query_filter=query_filter,
+            limit=limit,
+            with_payload=True,
+        ),
     )
+
+    if not hasattr(results, "points"):
+        raise QdrantStoreError(
+            "Qdrant search returned an invalid response"
+        )
+
+    return results
