@@ -2,7 +2,9 @@ import logging
 from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
@@ -374,6 +376,89 @@ async def request_id_middleware(
         reset_request_id(token)
 
 
+@app.exception_handler(
+    RequestValidationError
+)
+async def request_validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+):
+    request_id = getattr(
+        request.state,
+        "request_id",
+        None,
+    )
+
+    logger.warning(
+        "request_validation_failed",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "error_count": len(
+                exc.errors()
+            ),
+        },
+    )
+
+    response = JSONResponse(
+        status_code=422,
+        content={
+            "detail": jsonable_encoder(
+                exc.errors()
+            )
+        },
+    )
+
+    if request_id:
+        response.headers[
+            "X-Request-ID"
+        ] = request_id
+
+    return response
+
+
+@app.exception_handler(
+    HTTPException
+)
+async def http_exception_handler(
+    request: Request,
+    exc: HTTPException,
+):
+    request_id = getattr(
+        request.state,
+        "request_id",
+        None,
+    )
+
+    logger.info(
+        "http_exception",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": exc.status_code,
+        },
+    )
+
+    response = JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+        },
+        headers=(
+            dict(exc.headers)
+            if exc.headers
+            else None
+        ),
+    )
+
+    if request_id:
+        response.headers[
+            "X-Request-ID"
+        ] = request_id
+
+    return response
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(
     request: Request,
@@ -459,10 +544,12 @@ def readiness():
     ):
         try:
             check()
+
         except Exception:
             failed_dependencies.append(
                 dependency_name
             )
+
             logger.exception(
                 "readiness_dependency_failed",
                 extra={
