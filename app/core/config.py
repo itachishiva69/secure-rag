@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     query_rate_limit_requests: int = 30
     query_rate_limit_window_seconds: int = 60
 
+    login_rate_limit_requests: int = 5
+    login_rate_limit_window_seconds: int = 60
+
     upload_rate_limit_requests: int = 10
     upload_rate_limit_window_seconds: int = 60
 
@@ -75,7 +78,17 @@ class Settings(BaseSettings):
             "staging",
             "production",
         }
+        if self.login_rate_limit_requests <= 0:
+            raise ValueError(
+        "LOGIN_RATE_LIMIT_REQUESTS "
+        "must be positive"
+            )
 
+        if self.login_rate_limit_window_seconds <= 0:
+            raise ValueError(
+                "LOGIN_RATE_LIMIT_WINDOW_SECONDS "
+                "must be positive"
+            )
         if self.app_env not in allowed_envs:
             raise ValueError(
                 "APP_ENV must be one of: "

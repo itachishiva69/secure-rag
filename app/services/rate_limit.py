@@ -92,3 +92,31 @@ def get_query_rate_limiter() -> RateLimiter:
         ),
         key_prefix="secure-rag:rate-limit:query",
     )
+
+
+@lru_cache
+def get_login_ip_rate_limiter() -> RateLimiter:
+    settings = get_settings()
+
+    return RateLimiter(
+        redis=get_redis(),
+        requests=settings.login_rate_limit_requests,
+        window_seconds=(
+            settings.login_rate_limit_window_seconds
+        ),
+        key_prefix="secure-rag:rate-limit:login-ip",
+    )
+
+
+@lru_cache
+def get_login_email_rate_limiter() -> RateLimiter:
+    settings = get_settings()
+
+    return RateLimiter(
+        redis=get_redis(),
+        requests=settings.login_rate_limit_requests,
+        window_seconds=(
+            settings.login_rate_limit_window_seconds
+        ),
+        key_prefix="secure-rag:rate-limit:login-email",
+    )

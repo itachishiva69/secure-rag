@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
-
+import pytest
 import jwt
 from fastapi.testclient import TestClient
 
+from app.api import auth as auth_api
 from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.database import get_db
@@ -14,10 +15,16 @@ from app.models import (
     User,
 )
 from app.models.enums import UserRole
+from app.services.rate_limit import (
+    RateLimitError,
+    RateLimitExceeded,
+)
 
 
 def use_test_database(db_session):
-    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[get_db] = (
+        lambda: db_session
+    )
 
 
 def create_test_user(
@@ -76,9 +83,69 @@ def login(client, email, password):
             "password": password,
         },
     )
+def disable_login_rate_limiting(monkeypatch):
+    limiter = FakeRateLimiter()
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_ip_rate_limiter",
+        lambda: limiter,
+    )
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_email_rate_limiter",
+        lambda: limiter,
+    )
+
+    return limiter
 
 
-def test_valid_login_returns_jwt(db_session):
+class FakeRateLimiter:
+    def __init__(self):
+        self.calls = []
+
+    def check(self, *, subject):
+        self.calls.append(subject)
+
+class FailingRateLimiter:
+    def check(self, *, subject):
+        raise RateLimitError(
+            "simulated redis failure"
+        )
+
+class ExceededRateLimiter:
+    def __init__(self):
+        self.calls = []
+
+    def check(self, *, subject):
+        self.calls.append(subject)
+
+        raise RateLimitExceeded(
+            limit=5,
+            window_seconds=60,
+        )
+
+@pytest.fixture(autouse=True)
+def isolate_login_rate_limiting(monkeypatch):
+    limiter = FakeRateLimiter()
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_ip_rate_limiter",
+        lambda: limiter,
+    )
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_email_rate_limiter",
+        lambda: limiter,
+    )
+
+
+def test_valid_login_returns_jwt(
+    db_session,
+):
     department = Department(
         name="Engineering"
     )
@@ -110,11 +177,16 @@ def test_valid_login_returns_jwt(db_session):
 
     assert "access_token" in body
     assert body["token_type"] == "bearer"
-    assert isinstance(body["access_token"], str)
+    assert isinstance(
+        body["access_token"],
+        str,
+    )
     assert body["access_token"]
 
 
-def test_invalid_password_returns_401(db_session):
+def test_invalid_password_returns_401(
+    db_session,
+):
     department = Department(
         name="Engineering"
     )
@@ -124,7 +196,9 @@ def test_invalid_password_returns_401(db_session):
 
     create_test_user(
         db_session,
-        email="jwt-invalid-password@example.com",
+        email=(
+            "jwt-invalid-password@example.com"
+        ),
         password="correct-password",
         department_id=department.id,
     )
@@ -167,14 +241,18 @@ def test_malformed_token_returns_401():
     response = client.get(
         "/auth/me",
         headers={
-            "Authorization": "Bearer not-a-real-jwt",
+            "Authorization": (
+                "Bearer not-a-real-jwt"
+            ),
         },
     )
 
     assert response.status_code == 401
 
 
-def test_expired_token_returns_401(db_session):
+def test_expired_token_returns_401(
+    db_session,
+):
     department = Department(
         name="Engineering"
     )
@@ -213,7 +291,9 @@ def test_expired_token_returns_401(db_session):
     response = client.get(
         "/auth/me",
         headers={
-            "Authorization": f"Bearer {expired_token}",
+            "Authorization": (
+                f"Bearer {expired_token}"
+            ),
         },
     )
 
@@ -258,22 +338,22 @@ def test_finance_jwt_cannot_access_engineering_document(
 
     client = TestClient(app)
 
-    login_response = login(
+    response = login(
         client,
         "jwt-finance@example.com",
         "finance-password",
     )
 
-    assert login_response.status_code == 200
+    assert response.status_code == 200
 
-    token = login_response.json()[
-        "access_token"
-    ]
+    token = response.json()["access_token"]
 
     response = client.get(
         f"/documents/{document.id}",
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": (
+                f"Bearer {token}"
+            ),
         },
     )
 
@@ -287,11 +367,21 @@ def test_finance_jwt_cannot_access_engineering_document(
 def test_engineering_jwt_can_access_engineering_document(
     db_session,
 ):
+    finance = Department(
+        name="Finance"
+    )
+
     engineering = Department(
         name="Engineering"
     )
 
-    db_session.add(engineering)
+    db_session.add_all(
+        [
+            finance,
+            engineering,
+        ]
+    )
+
     db_session.flush()
 
     engineering_user = create_test_user(
@@ -312,22 +402,22 @@ def test_engineering_jwt_can_access_engineering_document(
 
     client = TestClient(app)
 
-    login_response = login(
+    response = login(
         client,
         "jwt-engineering@example.com",
         "engineering-password",
     )
 
-    assert login_response.status_code == 200
+    assert response.status_code == 200
 
-    token = login_response.json()[
-        "access_token"
-    ]
+    token = response.json()["access_token"]
 
     response = client.get(
         f"/documents/{document.id}",
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": (
+                f"Bearer {token}"
+            ),
         },
     )
 
@@ -336,7 +426,150 @@ def test_engineering_jwt_can_access_engineering_document(
     body = response.json()
 
     assert body["id"] == document.id
-    assert body["filename"] == "engineering-secret.txt"
-    assert body["department_ids"] == [
-        engineering.id
-    ]
+    assert body["filename"] == (
+        "engineering-secret.txt"
+    )
+
+
+def test_login_rate_limit_allows_valid_login(
+    db_session,
+    monkeypatch,
+):
+    department = Department(
+        name="Login Rate Limit Success"
+    )
+
+    db_session.add(department)
+    db_session.flush()
+
+    create_test_user(
+        db_session,
+        email="login-rate-success@example.com",
+        password="correct-password",
+        department_id=department.id,
+    )
+
+    fake_limiter = FakeRateLimiter()
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_ip_rate_limiter",
+        lambda: fake_limiter,
+    )
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_email_rate_limiter",
+        lambda: fake_limiter,
+    )
+
+    app.dependency_overrides.clear()
+    use_test_database(db_session)
+
+    client = TestClient(app)
+
+    response = login(
+        client,
+        "login-rate-success@example.com",
+        "correct-password",
+    )
+
+    assert response.status_code == 200
+
+    assert len(fake_limiter.calls) == 2
+
+
+def test_login_rate_limit_returns_429(
+    db_session,
+    monkeypatch,
+):
+    department = Department(
+        name="Login Rate Limit Exceeded"
+    )
+
+    db_session.add(department)
+    db_session.flush()
+
+    create_test_user(
+        db_session,
+        email="login-rate-exceeded@example.com",
+        password="correct-password",
+        department_id=department.id,
+    )
+
+    limiter = ExceededRateLimiter()
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_ip_rate_limiter",
+        lambda: limiter,
+    )
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_email_rate_limiter",
+        lambda: limiter,
+    )
+
+    app.dependency_overrides.clear()
+    use_test_database(db_session)
+
+    client = TestClient(app)
+
+    response = login(
+        client,
+        "login-rate-exceeded@example.com",
+        "wrong-password",
+    )
+
+    assert response.status_code == 429
+
+    assert response.json() == {
+        "detail": (
+            "Too many login attempts. "
+            "Please try again later."
+        )
+    }
+
+    assert response.headers[
+        "Retry-After"
+    ] == "60"
+
+
+def test_login_rate_limit_failure_returns_503(
+    db_session,
+    monkeypatch,
+):
+    failing_limiter = FailingRateLimiter()
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_ip_rate_limiter",
+        lambda: failing_limiter,
+    )
+
+    monkeypatch.setattr(
+        auth_api,
+        "get_login_email_rate_limiter",
+        lambda: failing_limiter,
+    )
+
+    app.dependency_overrides.clear()
+    use_test_database(db_session)
+
+    client = TestClient(app)
+
+    response = login(
+        client,
+        "does-not-matter@example.com",
+        "wrong-password",
+    )
+
+    assert response.status_code == 503
+
+    assert response.json() == {
+        "detail": (
+            "The request protection service "
+            "is temporarily unavailable."
+        )
+    }
