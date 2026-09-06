@@ -38,6 +38,28 @@ configure_logging(
 logger = logging.getLogger(__name__)
 
 
+def get_api_documentation_urls(
+    app_env: str,
+) -> dict[str, str | None]:
+    """
+    Keep interactive API documentation available outside
+    production, but disable the documentation endpoints in
+    production.
+    """
+    if app_env == "production":
+        return {
+            "docs_url": None,
+            "redoc_url": None,
+            "openapi_url": None,
+        }
+
+    return {
+        "docs_url": "/docs",
+        "redoc_url": "/redoc",
+        "openapi_url": "/openapi.json",
+    }
+
+
 class RequestBodyTooLarge(Exception):
     """Raised when a request body exceeds the configured limit."""
 
@@ -180,8 +202,16 @@ class RequestBodyLimitMiddleware:
             )
 
 
+documentation_urls = get_api_documentation_urls(
+    settings.app_env
+)
+
+
 app = FastAPI(
     title=settings.app_name,
+    docs_url=documentation_urls["docs_url"],
+    redoc_url=documentation_urls["redoc_url"],
+    openapi_url=documentation_urls["openapi_url"],
 )
 
 
