@@ -33,6 +33,161 @@ configure_logging(
 logger = logging.getLogger(__name__)
 
 
+class RequestBodyTooLarge(Exception):
+    """Raised when a request body exceeds the configured limit."""
+
+
+class RequestBodyLimitMiddleware:
+    def __init__(
+        self,
+        app,
+        *,
+        max_body_size: int,
+    ):
+        self.app = app
+        self.max_body_size = max_body_size
+
+    async def __call__(
+        self,
+        scope,
+        receive,
+        send,
+    ):
+        if scope["type"] != "http":
+            await self.app(
+                scope,
+                receive,
+                send,
+            )
+            return
+
+        content_length = None
+
+        for key, value in scope.get(
+            "headers",
+            [],
+        ):
+            if key.lower() == b"content-length":
+                content_length = value
+                break
+
+        if content_length is not None:
+            try:
+                declared_length = int(
+                    content_length
+                )
+            except (TypeError, ValueError):
+                response = JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": (
+                            "Invalid Content-Length"
+                        )
+                    },
+                )
+
+                await response(
+                    scope,
+                    receive,
+                    send,
+                )
+                return
+
+            if declared_length < 0:
+                response = JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": (
+                            "Invalid Content-Length"
+                        )
+                    },
+                )
+
+                await response(
+                    scope,
+                    receive,
+                    send,
+                )
+                return
+
+            if declared_length > self.max_body_size:
+                response = JSONResponse(
+                    status_code=413,
+                    content={
+                        "detail": (
+                            "Request body is too large. "
+                            "The maximum allowed size is "
+                            f"{settings.max_request_body_size_mb} MB."
+                        )
+                    },
+                )
+
+                await response(
+                    scope,
+                    receive,
+                    send,
+                )
+                return
+
+        received_size = 0
+        body_limit_exceeded = False
+
+        async def limited_receive():
+            nonlocal received_size
+            nonlocal body_limit_exceeded
+
+            message = await receive()
+
+            if message.get(
+                "type"
+            ) != "http.request":
+                return message
+
+            body = message.get(
+                "body",
+                b"",
+            )
+
+            received_size += len(body)
+
+            if received_size > self.max_body_size:
+                body_limit_exceeded = True
+
+                return {
+                    "type": "http.disconnect",
+                }
+
+            return message
+
+        async def limited_send(message):
+            await send(message)
+
+        try:
+            await self.app(
+                scope,
+                limited_receive,
+                limited_send,
+            )
+
+        except RequestBodyTooLarge:
+            response = JSONResponse(
+                status_code=413,
+                content={
+                    "detail": (
+                        "Request body is too large. "
+                        "The maximum allowed size is "
+                        f"{settings.max_request_body_size_mb} MB."
+                    )
+                },
+            )
+
+            await response(
+                scope,
+                receive,
+                send,
+            )
+
+
 app = FastAPI(
     title=settings.app_name,
 )
@@ -65,6 +220,15 @@ app.add_middleware(
     ],
 )
 
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    max_body_size=(
+        settings.max_request_body_size_mb
+        * 1024
+        * 1024
+    ),
+)
+
 
 app.include_router(
     auth_router
@@ -92,7 +256,9 @@ async def security_headers_middleware(
     request: Request,
     call_next,
 ):
-    response = await call_next(request)
+    response = await call_next(
+        request
+    )
 
     response.headers[
         "X-Content-Type-Options"

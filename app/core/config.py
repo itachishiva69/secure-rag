@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
 
     max_upload_size_mb: int = 25
+    max_request_body_size_mb: int = 30
     storage_path: str = "storage/documents"
 
     redis_url: str = "redis://localhost:6379/0"
@@ -104,6 +105,22 @@ class Settings(BaseSettings):
         if self.max_upload_size_mb <= 0:
             raise ValueError(
                 "MAX_UPLOAD_SIZE_MB must be positive"
+            )
+
+        if self.max_request_body_size_mb <= 0:
+            raise ValueError(
+                "MAX_REQUEST_BODY_SIZE_MB "
+                "must be positive"
+            )
+
+        if (
+            self.max_request_body_size_mb
+            < self.max_upload_size_mb
+        ):
+            raise ValueError(
+                "MAX_REQUEST_BODY_SIZE_MB must be "
+                "greater than or equal to "
+                "MAX_UPLOAD_SIZE_MB"
             )
 
         if self.llm_timeout_seconds <= 0:

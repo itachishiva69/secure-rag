@@ -282,3 +282,35 @@ def test_production_cannot_use_wildcard_cors(
         match="CORS_ALLOWED_ORIGINS",
     ):
         Settings()
+
+def test_request_body_size_default_is_at_least_upload_size():
+    settings = make_settings()
+
+    assert (
+        settings.max_request_body_size_mb
+        >= settings.max_upload_size_mb
+    )
+
+
+def test_request_body_size_must_be_positive():
+    with pytest.raises(
+        ValidationError,
+        match="MAX_REQUEST_BODY_SIZE_MB",
+    ):
+        make_settings(
+            max_request_body_size_mb=0,
+        )
+
+
+def test_request_body_size_cannot_be_smaller_than_upload_size():
+    with pytest.raises(
+        ValidationError,
+        match=(
+            "MAX_REQUEST_BODY_SIZE_MB must be "
+            "greater than or equal to MAX_UPLOAD_SIZE_MB"
+        ),
+    ):
+        make_settings(
+            max_upload_size_mb=25,
+            max_request_body_size_mb=24,
+        )
