@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 
 from app.models import Document
 from app.models.document_status import DocumentStatus
-from app.services.queue import enqueue_ingestion_job
+from app.services.outbox import (
+    create_ingestion_outbox_event,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -57,12 +59,24 @@ def _claim_next_stale_processing_document(
     db: Session,
     *,
     stale_after: timedelta,
-) -> Document | None:
+) -> int | None:
     """
-    Atomically claim one stale PROCESSING document.
+    Atomically recover one stale PROCESSING document.
 
-    PostgreSQL row locking ensures that concurrent
-    reconciliation workers cannot claim the same document.
+    PostgreSQL row locking ensures concurrent reconciliation
+    workers cannot claim the same document.
+
+    The document state transition and ingestion outbox event
+    are committed in the same database transaction.
+
+    This is the critical consistency boundary:
+
+        PROCESSING -> UPLOADED
+        + ingestion outbox event
+        -----------------------
+        one PostgreSQL transaction
+
+    Redis/RQ is intentionally not contacted here.
     """
 
     cutoff = (
@@ -91,12 +105,22 @@ def _claim_next_stale_processing_document(
     if document is None:
         return None
 
-    document.status = DocumentStatus.UPLOADED
+    document_id = document.id
+
+    document.status = (
+        DocumentStatus.UPLOADED
+    )
+
     document.processing_started_at = None
+
+    create_ingestion_outbox_event(
+        db,
+        document_id=document_id,
+    )
 
     db.commit()
 
-    return document
+    return document_id
 
 
 def reconcile_stale_processing_documents(
@@ -109,71 +133,50 @@ def reconcile_stale_processing_documents(
     to have stopped making progress.
 
     Each stale document is claimed using a PostgreSQL row
-    lock before being transitioned to UPLOADED.
+    lock.
 
-    The database transaction is committed before the
-    ingestion job is enqueued.
+    Recovery and creation of the ingestion outbox event
+    happen inside the same PostgreSQL transaction.
 
-    All stale documents are attempted. Enqueue failures
-    are recorded and the affected document is marked FAILED.
-    The function raises after processing the remaining
-    documents if any enqueue failed.
+    The outbox dispatcher is responsible for eventually
+    delivering the resulting ingestion event to Redis/RQ.
+
+    If the database transaction fails, the transaction is
+    rolled back and the document remains PROCESSING.
     """
 
     recovered_ids: list[int] = []
-    enqueue_failures: list[int] = []
 
     while True:
-        document = (
-            _claim_next_stale_processing_document(
-                db,
-                stale_after=stale_after,
-            )
-        )
-
-        if document is None:
-            break
-
-        document_id = document.id
-
         try:
-            enqueue_ingestion_job(
-                document_id
+            document_id = (
+                _claim_next_stale_processing_document(
+                    db,
+                    stale_after=stale_after,
+                )
             )
 
         except Exception:
+            db.rollback()
+
             logger.exception(
-                "document_reconciliation_enqueue_failed",
-                extra={
-                    "document_id": document_id,
-                },
+                "document_reconciliation_transaction_failed"
             )
 
-            failed_document = db.get(
-                Document,
-                document_id,
-            )
+            raise
 
-            if failed_document is not None:
-                failed_document.status = (
-                    DocumentStatus.FAILED
-                )
-                failed_document.processing_started_at = None
-                db.commit()
-
-            enqueue_failures.append(
-                document_id
-            )
-            continue
+        if document_id is None:
+            break
 
         recovered_ids.append(
             document_id
         )
 
-    if enqueue_failures:
-        raise RuntimeError(
-            "Failed to enqueue reconciliation jobs "
-            f"for documents: {enqueue_failures}"
+        logger.info(
+            "document_reconciliation_recovered",
+            extra={
+                "document_id": document_id,
+            },
         )
 
     return recovered_ids

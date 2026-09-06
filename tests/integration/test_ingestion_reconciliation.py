@@ -7,6 +7,7 @@ from app.models import (
     Department,
     Document,
     DocumentDepartment,
+    OutboxEvent,
     User,
 )
 from app.models.document_status import DocumentStatus
@@ -14,12 +15,21 @@ from app.models.enums import UserRole
 from app.services import reconciliation
 
 
-def unique_name(prefix: str) -> str:
-    return f"{prefix}-{uuid4().hex}"
+def unique_name(
+    prefix: str,
+) -> str:
+    return (
+        f"{prefix}-{uuid4().hex}"
+    )
 
 
-def unique_email(prefix: str) -> str:
-    return f"{prefix}-{uuid4().hex}@example.com"
+def unique_email(
+    prefix: str,
+) -> str:
+    return (
+        f"{prefix}-{uuid4().hex}"
+        "@example.com"
+    )
 
 
 def create_department(
@@ -191,7 +201,7 @@ def test_non_processing_documents_are_not_reconciled(
     assert failed_document.id not in stale_ids
 
 
-def test_reconciliation_requeues_stale_document(
+def test_reconciliation_creates_ingestion_outbox_event(
     db_session,
     monkeypatch,
 ):
@@ -214,19 +224,17 @@ def test_reconciliation_requeues_stale_document(
         ),
     )
 
-    enqueued_ids: list[int] = []
-
-    def fake_enqueue(
-        document_id: int,
-    ):
-        enqueued_ids.append(
-            document_id
+    def fail_direct_enqueue(*args, **kwargs):
+        raise AssertionError(
+            "reconciliation must not "
+            "enqueue directly to Redis/RQ"
         )
 
     monkeypatch.setattr(
         reconciliation,
         "enqueue_ingestion_job",
-        fake_enqueue,
+        fail_direct_enqueue,
+        raising=False,
     )
 
     recovered_ids = (
@@ -240,11 +248,18 @@ def test_reconciliation_requeues_stale_document(
         document
     )
 
-    assert recovered_ids == [
-        document.id
-    ]
+    events = (
+        db_session.query(OutboxEvent)
+        .filter(
+            OutboxEvent.document_id
+            == document.id,
+            OutboxEvent.event_type
+            == "ingest_document",
+        )
+        .all()
+    )
 
-    assert enqueued_ids == [
+    assert recovered_ids == [
         document.id
     ]
 
@@ -257,10 +272,17 @@ def test_reconciliation_requeues_stale_document(
         is None
     )
 
+    assert len(events) == 1
+
+    assert events[0].status == (
+        "pending"
+    )
+
+    assert events[0].attempts == 0
+
 
 def test_reconciliation_does_not_requeue_fresh_document(
     db_session,
-    monkeypatch,
 ):
     department = create_department(
         db_session
@@ -281,21 +303,6 @@ def test_reconciliation_does_not_requeue_fresh_document(
         ),
     )
 
-    enqueued_ids: list[int] = []
-
-    def fake_enqueue(
-        document_id: int,
-    ):
-        enqueued_ids.append(
-            document_id
-        )
-
-    monkeypatch.setattr(
-        reconciliation,
-        "enqueue_ingestion_job",
-        fake_enqueue,
-    )
-
     recovered_ids = (
         reconciliation.reconcile_stale_processing_documents(
             db_session,
@@ -308,7 +315,6 @@ def test_reconciliation_does_not_requeue_fresh_document(
     )
 
     assert recovered_ids == []
-    assert enqueued_ids == []
 
     assert document.status == (
         DocumentStatus.PROCESSING
@@ -319,8 +325,21 @@ def test_reconciliation_does_not_requeue_fresh_document(
         is not None
     )
 
+    events = (
+        db_session.query(OutboxEvent)
+        .filter(
+            OutboxEvent.document_id
+            == document.id,
+            OutboxEvent.event_type
+            == "ingest_document",
+        )
+        .all()
+    )
 
-def test_reconciliation_marks_document_failed_when_requeue_fails(
+    assert events == []
+
+
+def test_reconciliation_rolls_back_when_outbox_creation_fails(
     db_session,
     monkeypatch,
 ):
@@ -343,24 +362,29 @@ def test_reconciliation_marks_document_failed_when_requeue_fails(
         ),
     )
 
-    def failing_enqueue(
+    # Commit the initial document state so the transaction
+    # intentionally rolled back by reconciliation does not
+    # also remove the test fixture data.
+    db_session.commit()
+
+    def failing_outbox_creation(
+        db,
+        *,
         document_id: int,
     ):
         raise RuntimeError(
-            "simulated enqueue failure"
+            "simulated outbox failure"
         )
 
     monkeypatch.setattr(
         reconciliation,
-        "enqueue_ingestion_job",
-        failing_enqueue,
+        "create_ingestion_outbox_event",
+        failing_outbox_creation,
     )
 
     with pytest.raises(
         RuntimeError,
-        match=(
-            "Failed to enqueue reconciliation jobs"
-        ),
+        match="simulated outbox failure",
     ):
         reconciliation.reconcile_stale_processing_documents(
             db_session,
@@ -372,18 +396,30 @@ def test_reconciliation_marks_document_failed_when_requeue_fails(
     )
 
     assert document.status == (
-        DocumentStatus.FAILED
+        DocumentStatus.PROCESSING
     )
 
     assert (
         document.processing_started_at
-        is None
+        is not None
     )
+
+    events = (
+        db_session.query(OutboxEvent)
+        .filter(
+            OutboxEvent.document_id
+            == document.id,
+            OutboxEvent.event_type
+            == "ingest_document",
+        )
+        .all()
+    )
+
+    assert events == []
 
 
 def test_reconciliation_is_idempotent_after_first_claim(
     db_session,
-    monkeypatch,
 ):
     department = create_department(
         db_session
@@ -402,21 +438,6 @@ def test_reconciliation_is_idempotent_after_first_claim(
             datetime.now(timezone.utc)
             - timedelta(hours=2)
         ),
-    )
-
-    enqueued_ids: list[int] = []
-
-    def fake_enqueue(
-        document_id: int,
-    ):
-        enqueued_ids.append(
-            document_id
-        )
-
-    monkeypatch.setattr(
-        reconciliation,
-        "enqueue_ingestion_job",
-        fake_enqueue,
     )
 
     first_recovery = (
@@ -433,12 +454,25 @@ def test_reconciliation_is_idempotent_after_first_claim(
         )
     )
 
+    events = (
+        db_session.query(OutboxEvent)
+        .filter(
+            OutboxEvent.document_id
+            == document.id,
+            OutboxEvent.event_type
+            == "ingest_document",
+        )
+        .all()
+    )
+
     assert first_recovery == [
         document.id
     ]
 
     assert second_recovery == []
 
-    assert enqueued_ids == [
-        document.id
-    ]
+    assert len(events) == 1
+
+    assert events[0].status == (
+        "pending"
+    )

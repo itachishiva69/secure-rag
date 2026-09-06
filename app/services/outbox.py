@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
+from rq.exceptions import DuplicateJobError
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
@@ -14,8 +15,13 @@ from app.services.queue import (
 logger = logging.getLogger(__name__)
 
 
-INGEST_DOCUMENT_EVENT = "ingest_document"
-DELETE_DOCUMENT_EVENT = "delete_document"
+INGEST_DOCUMENT_EVENT = (
+    "ingest_document"
+)
+
+DELETE_DOCUMENT_EVENT = (
+    "delete_document"
+)
 
 OUTBOX_PENDING = "pending"
 OUTBOX_DISPATCHED = "dispatched"
@@ -23,31 +29,44 @@ OUTBOX_DISPATCHED = "dispatched"
 DISPATCH_RETRY_SECONDS = 60
 
 
-def create_ingestion_outbox_event(
+def _find_pending_event(
     db: Session,
     *,
     document_id: int,
-) -> OutboxEvent:
-    existing_event = (
+    event_type: str,
+) -> OutboxEvent | None:
+    return (
         db.query(OutboxEvent)
         .filter(
             and_(
                 OutboxEvent.document_id
                 == document_id,
                 OutboxEvent.event_type
-                == INGEST_DOCUMENT_EVENT,
+                == event_type,
                 OutboxEvent.status
                 == OUTBOX_PENDING,
             )
         )
         .order_by(
-            OutboxEvent.id.desc()
+            OutboxEvent.id
         )
         .first()
     )
 
-    if existing_event is not None:
-        return existing_event
+
+def create_ingestion_outbox_event(
+    db: Session,
+    *,
+    document_id: int,
+) -> OutboxEvent:
+    existing = _find_pending_event(
+        db,
+        document_id=document_id,
+        event_type=INGEST_DOCUMENT_EVENT,
+    )
+
+    if existing is not None:
+        return existing
 
     event = OutboxEvent(
         event_type=INGEST_DOCUMENT_EVENT,
@@ -67,26 +86,14 @@ def create_delete_outbox_event(
     *,
     document_id: int,
 ) -> OutboxEvent:
-    existing_event = (
-        db.query(OutboxEvent)
-        .filter(
-            and_(
-                OutboxEvent.document_id
-                == document_id,
-                OutboxEvent.event_type
-                == DELETE_DOCUMENT_EVENT,
-                OutboxEvent.status
-                == OUTBOX_PENDING,
-            )
-        )
-        .order_by(
-            OutboxEvent.id.desc()
-        )
-        .first()
+    existing = _find_pending_event(
+        db,
+        document_id=document_id,
+        event_type=DELETE_DOCUMENT_EVENT,
     )
 
-    if existing_event is not None:
-        return existing_event
+    if existing is not None:
+        return existing
 
     event = OutboxEvent(
         event_type=DELETE_DOCUMENT_EVENT,
@@ -137,69 +144,117 @@ def _claim_next_pending_event(
     return event
 
 
+def _mark_event_dispatched(
+    db: Session,
+    event: OutboxEvent,
+) -> None:
+    event.status = (
+        OUTBOX_DISPATCHED
+    )
+
+    event.dispatched_at = (
+        datetime.now(timezone.utc)
+    )
+
+    event.last_error = None
+
+    db.commit()
+
+
+def _mark_event_retryable(
+    db: Session,
+    event: OutboxEvent,
+    exc: Exception,
+) -> None:
+    event.available_at = (
+        datetime.now(timezone.utc)
+        + timedelta(
+            seconds=DISPATCH_RETRY_SECONDS
+        )
+    )
+
+    event.last_error = str(
+        exc
+    )
+
+    db.commit()
+
+
+def _dispatch_event(
+    event: OutboxEvent,
+) -> None:
+    if event.event_type == (
+        INGEST_DOCUMENT_EVENT
+    ):
+        enqueue_ingestion_job(
+            document_id=event.document_id,
+            job_id=(
+                f"document-ingestion-outbox-"
+                f"{event.id}"
+            ),
+        )
+
+        return
+
+    if event.event_type == (
+        DELETE_DOCUMENT_EVENT
+    ):
+        enqueue_cleanup_job(
+            document_id=event.document_id,
+            job_id=(
+                f"document-cleanup-outbox-"
+                f"{event.id}"
+            ),
+        )
+
+        return
+
+    raise ValueError(
+        f"Unsupported outbox event type: "
+        f"{event.event_type}"
+    )
+
+
 def dispatch_pending_outbox_events(
     db: Session,
 ) -> list[int]:
-    """
-    Publish pending outbox events to RQ.
-
-    PostgreSQL remains the durable source of truth.
-    RQ is the execution transport.
-
-    Events are claimed with SKIP LOCKED so concurrent
-    dispatchers do not process the same event at once.
-    """
-
     dispatched_ids: list[int] = []
 
     while True:
-        event = _claim_next_pending_event(
-            db
+        event = (
+            _claim_next_pending_event(
+                db
+            )
         )
 
         if event is None:
             break
 
         try:
-            if event.event_type == (
-                INGEST_DOCUMENT_EVENT
-            ):
-                enqueue_ingestion_job(
-                    document_id=event.document_id,
-                    job_id=(
-                        f"document-ingestion-outbox-"
-                        f"{event.id}"
-                    ),
-                )
-
-            elif event.event_type == (
-                DELETE_DOCUMENT_EVENT
-            ):
-                enqueue_cleanup_job(
-                    document_id=event.document_id,
-                    job_id=(
-                        f"document-cleanup-outbox-"
-                        f"{event.id}"
-                    ),
-                )
-
-            else:
-                raise ValueError(
-                    f"Unsupported outbox event type: "
-                    f"{event.event_type}"
-                )
-
-            event.status = (
-                OUTBOX_DISPATCHED
+            _dispatch_event(
+                event
             )
-            event.dispatched_at = (
-                datetime.now(
-                    timezone.utc
-                )
-            )
-            event.last_error = None
 
-            db.commit()
+        except DuplicateJobError:
+            # The database transaction may have failed after
+            # Redis accepted the job. On the next dispatcher
+            # pass RQ reports that the deterministic unique job
+            # already exists. That means delivery already
+            # succeeded and the outbox event can safely be
+            # finalized.
+            logger.info(
+                "outbox_event_job_already_exists",
+                extra={
+                    "outbox_event_id": event.id,
+                    "document_id": event.document_id,
+                    "event_type": event.event_type,
+                },
+            )
+
+            _mark_event_dispatched(
+                db,
+                event,
+            )
 
             dispatched_ids.append(
                 event.id
@@ -215,19 +270,20 @@ def dispatch_pending_outbox_events(
                 },
             )
 
-            event.available_at = (
-                datetime.now(
-                    timezone.utc
-                )
-                + timedelta(
-                    seconds=DISPATCH_RETRY_SECONDS
-                )
+            _mark_event_retryable(
+                db,
+                event,
+                exc,
             )
 
-            event.last_error = str(
-                exc
+        else:
+            _mark_event_dispatched(
+                db,
+                event,
             )
 
-            db.commit()
+            dispatched_ids.append(
+                event.id
+            )
 
     return dispatched_ids

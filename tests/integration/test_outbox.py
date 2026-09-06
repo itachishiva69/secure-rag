@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+from rq.exceptions import DuplicateJobError
 
 from app.models import (
     Department,
@@ -146,6 +147,56 @@ def test_create_ingestion_outbox_event(
     assert saved_event.attempts == 0
 
 
+def test_create_ingestion_outbox_event_is_idempotent(
+    db_session,
+):
+    department = create_department(
+        db_session
+    )
+
+    admin = create_admin(
+        db_session,
+        department.id,
+    )
+
+    document = create_document(
+        db_session,
+        user_id=admin.id,
+        department_id=department.id,
+    )
+
+    first_event = (
+        outbox.create_ingestion_outbox_event(
+            db_session,
+            document_id=document.id,
+        )
+    )
+
+    second_event = (
+        outbox.create_ingestion_outbox_event(
+            db_session,
+            document_id=document.id,
+        )
+    )
+
+    assert first_event.id == (
+        second_event.id
+    )
+
+    events = (
+        db_session.query(OutboxEvent)
+        .filter(
+            OutboxEvent.document_id
+            == document.id,
+            OutboxEvent.event_type
+            == outbox.INGEST_DOCUMENT_EVENT,
+        )
+        .all()
+    )
+
+    assert len(events) == 1
+
+
 def test_dispatch_marks_event_dispatched(
     db_session,
     monkeypatch,
@@ -192,6 +243,88 @@ def test_dispatch_marks_event_dispatched(
         outbox,
         "enqueue_ingestion_job",
         fake_enqueue,
+    )
+
+    dispatched_ids = (
+        outbox.dispatch_pending_outbox_events(
+            db_session
+        )
+    )
+
+    db_session.refresh(
+        event
+    )
+
+    assert dispatched_ids == [
+        event.id
+    ]
+
+    assert calls == [
+        (
+            document.id,
+            f"document-ingestion-outbox-{event.id}",
+        )
+    ]
+
+    assert event.status == (
+        outbox.OUTBOX_DISPATCHED
+    )
+
+    assert event.dispatched_at is not None
+    assert event.last_error is None
+    assert event.attempts == 1
+
+
+def test_dispatch_treats_duplicate_job_as_dispatched(
+    db_session,
+    monkeypatch,
+):
+    department = create_department(
+        db_session
+    )
+
+    admin = create_admin(
+        db_session,
+        department.id,
+    )
+
+    document = create_document(
+        db_session,
+        user_id=admin.id,
+        department_id=department.id,
+    )
+
+    event = (
+        outbox.create_ingestion_outbox_event(
+            db_session,
+            document_id=document.id,
+        )
+    )
+
+    db_session.commit()
+
+    calls: list[tuple[int, str]] = []
+
+    def duplicate_enqueue(
+        document_id: int,
+        *,
+        job_id: str | None = None,
+    ):
+        calls.append(
+            (
+                document_id,
+                job_id,
+            )
+        )
+
+        raise DuplicateJobError(
+            'job already exists'
+        )
+
+    monkeypatch.setattr(
+        outbox,
+        "enqueue_ingestion_job",
+        duplicate_enqueue,
     )
 
     dispatched_ids = (
