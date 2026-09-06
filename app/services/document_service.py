@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import HTTPException, status
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
@@ -5,11 +7,10 @@ from sqlalchemy.orm import Session
 from app.models import (
     Department,
     Document,
+    User,
 )
 from app.models.document_status import DocumentStatus
 from app.models.enums import UserRole
-from app.models import User
-from app.rag.qdrant_store import delete_document_vectors
 from app.schemas.document import DocumentCreate
 
 
@@ -54,8 +55,7 @@ def create_document(
     missing_department_ids = [
         department_id
         for department_id in requested_department_ids
-        if department_id
-        not in found_department_ids
+        if department_id not in found_department_ids
     ]
 
     if missing_department_ids:
@@ -76,7 +76,6 @@ def create_document(
     document.departments = departments
 
     db.add(document)
-
     db.flush()
 
     return document
@@ -91,8 +90,7 @@ def get_document_for_user(
         document = (
             db.query(Document)
             .filter(
-                Document.id
-                == document_id
+                Document.id == document_id
             )
             .first()
         )
@@ -109,8 +107,7 @@ def get_document_for_user(
             .join(Document.departments)
             .filter(
                 and_(
-                    Document.id
-                    == document_id,
+                    Document.id == document_id,
                     Department.id
                     == current_user.department_id,
                 )
@@ -124,9 +121,7 @@ def get_document_for_user(
             detail="Document not found",
         )
 
-    if document.status == (
-        DocumentStatus.DELETING
-    ):
+    if document.status == DocumentStatus.DELETING:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document not found",
@@ -242,8 +237,7 @@ def update_document_departments(
     document = (
         db.query(Document)
         .filter(
-            Document.id
-            == document_id
+            Document.id == document_id
         )
         .with_for_update()
         .first()
@@ -255,9 +249,7 @@ def update_document_departments(
             detail="Document not found",
         )
 
-    if document.status == (
-        DocumentStatus.DELETING
-    ):
+    if document.status == DocumentStatus.DELETING:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -283,8 +275,7 @@ def update_document_departments(
     missing_department_ids = [
         department_id
         for department_id in requested_department_ids
-        if department_id
-        not in found_department_ids
+        if department_id not in found_department_ids
     ]
 
     if missing_department_ids:
@@ -296,15 +287,12 @@ def update_document_departments(
         )
 
     document.departments = departments
-
     document.processing_started_at = None
 
-    if document.status != (
-        DocumentStatus.PROCESSING
-    ):
-        document.status = (
-            DocumentStatus.UPLOADED
-        )
+    if document.status != DocumentStatus.PROCESSING:
+        document.status = DocumentStatus.UPLOADED
+
+    document.deletion_started_at = None
 
     db.flush()
 
@@ -326,8 +314,7 @@ def prepare_document_reindex(
     document = (
         db.query(Document)
         .filter(
-            Document.id
-            == document_id
+            Document.id == document_id
         )
         .with_for_update()
         .first()
@@ -347,9 +334,7 @@ def prepare_document_reindex(
             ),
         )
 
-    if document.status == (
-        DocumentStatus.PROCESSING
-    ):
+    if document.status == DocumentStatus.PROCESSING:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -357,9 +342,7 @@ def prepare_document_reindex(
             ),
         )
 
-    if document.status == (
-        DocumentStatus.DELETING
-    ):
+    if document.status == DocumentStatus.DELETING:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -367,11 +350,9 @@ def prepare_document_reindex(
             ),
         )
 
-    document.status = (
-        DocumentStatus.UPLOADED
-    )
-
+    document.status = DocumentStatus.UPLOADED
     document.processing_started_at = None
+    document.deletion_started_at = None
 
     db.flush()
 
@@ -393,8 +374,7 @@ def prepare_document_delete(
     document = (
         db.query(Document)
         .filter(
-            Document.id
-            == document_id
+            Document.id == document_id
         )
         .with_for_update()
         .first()
@@ -406,9 +386,7 @@ def prepare_document_delete(
             detail="Document not found",
         )
 
-    if document.status == (
-        DocumentStatus.PROCESSING
-    ):
+    if document.status == DocumentStatus.PROCESSING:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -416,9 +394,7 @@ def prepare_document_delete(
             ),
         )
 
-    if document.status == (
-        DocumentStatus.DELETING
-    ):
+    if document.status == DocumentStatus.DELETING:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -426,18 +402,11 @@ def prepare_document_delete(
             ),
         )
 
-    # Qdrant is part of the retrieval security boundary.
-    # Delete the vectors before making the deletion state
-    # durable in PostgreSQL.
-    delete_document_vectors(
-        document.id
-    )
-
-    document.status = (
-        DocumentStatus.DELETING
-    )
-
+    document.status = DocumentStatus.DELETING
     document.processing_started_at = None
+    document.deletion_started_at = datetime.now(
+        timezone.utc
+    )
 
     db.flush()
 

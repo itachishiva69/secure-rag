@@ -44,7 +44,7 @@ class Settings(BaseSettings):
 
     reconciliation_interval_seconds: int = 300
     reconciliation_stale_processing_minutes: int = 30
-
+    reconciliation_stale_deleting_minutes: int = 30
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,

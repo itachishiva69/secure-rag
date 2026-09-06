@@ -6,23 +6,20 @@ from app.core.config import get_settings
 from app.db.database import SessionLocal
 from app.models import Document
 from app.models.document_status import DocumentStatus
+from app.rag.qdrant_store import delete_document_vectors
 from app.services.ingestion import ingest_document
-from app.services.outbox import (
-    dispatch_pending_outbox_events,
-)
+from app.services.outbox import dispatch_pending_outbox_events
 from app.services.reconciliation import (
+    reconcile_stale_deleting_documents,
     reconcile_stale_processing_documents,
 )
 
-
 logger = logging.getLogger(__name__)
-
-settings = get_settings()
 
 
 def ingest_document_job(
     document_id: int,
-) -> None:
+) -> int:
     logger.info(
         "document_ingestion_job_started",
         extra={
@@ -45,6 +42,8 @@ def ingest_document_job(
             },
         )
 
+        return indexed_count
+
     except Exception:
         logger.exception(
             "document_ingestion_job_failed",
@@ -62,15 +61,20 @@ def delete_document_job(
     """
     Complete a previously requested document deletion.
 
-    Qdrant cleanup happens during the delete request.
-    This job removes the stored file and then deletes the
-    PostgreSQL document row.
+    PostgreSQL must already contain the document in DELETING state
+    before this worker starts.
 
-    Every operation is idempotent:
-    deleting a missing file is safe, and deleting an already
-    removed database row is treated as successful completion.
+    Cleanup order:
+
+        1. Delete Qdrant vectors.
+        2. Delete the stored file.
+        3. Delete the PostgreSQL document row.
+
+    The worker is idempotent:
+    - a missing document means deletion already completed;
+    - a missing storage file is safe because missing_ok=True;
+    - a non-DELETING document is ignored.
     """
-
     logger.info(
         "document_cleanup_job_started",
         extra={
@@ -87,29 +91,30 @@ def delete_document_job(
 
             if document is None:
                 logger.info(
-                    "document_cleanup_job_already_complete",
+                    "document_cleanup_already_complete",
                     extra={
                         "document_id": document_id,
                     },
                 )
                 return
 
-            if document.status != (
-                DocumentStatus.DELETING
-            ):
+            if document.status != DocumentStatus.DELETING:
                 logger.warning(
-                    "document_cleanup_job_invalid_status",
+                    "document_cleanup_invalid_state",
                     extra={
                         "document_id": document_id,
-                        "status": (
-                            document.status.value
-                        ),
+                        "status": document.status.value,
                     },
                 )
                 return
 
-            storage_path = (
-                document.storage_path
+            storage_path = document.storage_path
+
+            # External cleanup happens before the database row is
+            # removed. If Qdrant fails, the PostgreSQL row remains
+            # in DELETING state and the RQ retry can safely try again.
+            delete_document_vectors(
+                document_id
             )
 
             Path(
@@ -142,44 +147,57 @@ def delete_document_job(
         raise
 
 
-def reconcile_stale_documents_job() -> None:
-    stale_after_minutes = (
-        settings.reconciliation_stale_processing_minutes
+def reconcile_stale_documents_job() -> dict[str, list[int]]:
+    """
+    Recover stale ingestion and deletion operations.
+
+    Reconciliation only changes PostgreSQL state and creates
+    outbox events. It does not directly enqueue Redis/RQ jobs.
+    """
+    settings = get_settings()
+
+    recovered_processing_ids: list[int] = []
+    recovered_deleting_ids: list[int] = []
+
+    processing_stale_after = timedelta(
+        minutes=(
+            settings.reconciliation_stale_processing_minutes
+        )
     )
 
-    stale_after = timedelta(
-        minutes=stale_after_minutes
+    deleting_stale_after = timedelta(
+        minutes=(
+            settings.reconciliation_stale_deleting_minutes
+        )
     )
 
     logger.info(
         "document_reconciliation_job_started",
         extra={
-            "stale_after_minutes": (
-                stale_after_minutes
+            "processing_stale_after_minutes": (
+                settings.reconciliation_stale_processing_minutes
+            ),
+            "deleting_stale_after_minutes": (
+                settings.reconciliation_stale_deleting_minutes
             ),
         },
     )
 
     try:
         with SessionLocal() as db:
-            recovered_ids = (
+            recovered_processing_ids = (
                 reconcile_stale_processing_documents(
                     db=db,
-                    stale_after=stale_after,
+                    stale_after=processing_stale_after,
                 )
             )
 
-        logger.info(
-            "document_reconciliation_job_completed",
-            extra={
-                "recovered_count": len(
-                    recovered_ids
-                ),
-                "recovered_document_ids": (
-                    recovered_ids
-                ),
-            },
-        )
+            recovered_deleting_ids = (
+                reconcile_stale_deleting_documents(
+                    db=db,
+                    stale_after=deleting_stale_after,
+                )
+            )
 
     except Exception:
         logger.exception(
@@ -188,8 +206,28 @@ def reconcile_stale_documents_job() -> None:
 
         raise
 
+    logger.info(
+        "document_reconciliation_job_completed",
+        extra={
+            "recovered_processing_ids": (
+                recovered_processing_ids
+            ),
+            "recovered_deleting_ids": (
+                recovered_deleting_ids
+            ),
+        },
+    )
 
-def dispatch_pending_outbox_job() -> None:
+    return {
+        "processing": recovered_processing_ids,
+        "deleting": recovered_deleting_ids,
+    }
+
+
+def dispatch_pending_outbox_job() -> list[int]:
+    """
+    Dispatch durable PostgreSQL outbox events to RQ.
+    """
     logger.info(
         "outbox_dispatch_job_started"
     )
@@ -213,6 +251,8 @@ def dispatch_pending_outbox_job() -> None:
                 ),
             },
         )
+
+        return dispatched_ids
 
     except Exception:
         logger.exception(
