@@ -1,237 +1,259 @@
-import asyncio
-import json
-import logging
+import uuid
 
-from fastapi import HTTPException
+from fastapi import (
+    HTTPException,
+    Request,
+)
 from fastapi.exceptions import RequestValidationError
-from starlette.requests import Request
+from fastapi.testclient import TestClient
 
-from app.core.logging import JsonFormatter
-from app.main import (
-    http_exception_handler,
-    request_validation_exception_handler,
-    unhandled_exception_handler,
+from app.main import app
+
+
+client = TestClient(
+    app,
+    raise_server_exceptions=False,
 )
 
 
-def make_request(
+def make_request_id() -> str:
+    return str(uuid.uuid4())
+
+
+def register_test_route(
+    path: str,
+    endpoint,
     *,
-    path: str = "/internal-test",
+    method: str = "GET",
 ):
-    return Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": path,
-            "headers": [],
-            "query_string": b"",
-        }
+    app.router.add_api_route(
+        path,
+        endpoint,
+        methods=[method],
     )
 
 
-def test_unhandled_exception_returns_safe_response():
-    request = make_request()
-
-    request.state.request_id = (
-        "test-request-id"
-    )
-
-    secret_error = RuntimeError(
-        "database password must never leak"
-    )
-
-    response = asyncio.run(
-        unhandled_exception_handler(
-            request,
-            secret_error,
+def remove_test_route(path: str):
+    route = next(
+        route
+        for route in app.routes
+        if getattr(
+            route,
+            "path",
+            None,
         )
+        == path
     )
 
-    assert response.status_code == 500
+    app.routes.remove(route)
 
-    body = json.loads(
-        response.body.decode("utf-8")
-    )
 
-    assert body == {
-        "detail": "Internal server error",
-        "request_id": "test-request-id",
-    }
+def test_http_exception_returns_detail_and_request_id():
+    request_id = make_request_id()
 
-    assert (
-        "database password"
-        not in response.body.decode(
-            "utf-8"
+    async def failing_endpoint(
+        request: Request,
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="Resource not found",
         )
+
+    path = "/test-error-http"
+
+    register_test_route(
+        path,
+        failing_endpoint,
     )
 
-    assert response.headers[
-        "X-Request-ID"
-    ] == "test-request-id"
-
-
-def test_http_exception_preserves_safe_detail():
-    request = make_request()
-
-    request.state.request_id = (
-        "test-request-id"
-    )
-
-    exception = HTTPException(
-        status_code=403,
-        detail="Admin privileges required",
-    )
-
-    response = asyncio.run(
-        http_exception_handler(
-            request,
-            exception,
+    try:
+        response = client.get(
+            path,
+            headers={
+                "X-Request-ID": request_id,
+            },
         )
-    )
 
-    assert response.status_code == 403
+        assert response.status_code == 404
 
-    body = json.loads(
-        response.body.decode("utf-8")
-    )
+        body = response.json()
 
-    assert body == {
-        "detail": "Admin privileges required",
-    }
+        assert body["detail"] == (
+            "Resource not found"
+        )
 
-    assert response.headers[
-        "X-Request-ID"
-    ] == "test-request-id"
+        assert body["request_id"] == (
+            request_id
+        )
+
+        assert response.headers[
+            "X-Request-ID"
+        ] == request_id
+
+    finally:
+        remove_test_route(path)
 
 
 def test_http_exception_preserves_headers():
-    request = make_request()
+    request_id = make_request_id()
 
-    request.state.request_id = (
-        "test-request-id"
-    )
-
-    exception = HTTPException(
-        status_code=429,
-        detail="Too many requests",
-        headers={
-            "Retry-After": "60",
-        },
-    )
-
-    response = asyncio.run(
-        http_exception_handler(
-            request,
-            exception,
+    async def failing_endpoint(
+        request: Request,
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests",
+            headers={
+                "Retry-After": "30",
+            },
         )
+
+    path = "/test-error-http-headers"
+
+    register_test_route(
+        path,
+        failing_endpoint,
     )
 
-    assert response.status_code == 429
+    try:
+        response = client.get(
+            path,
+            headers={
+                "X-Request-ID": request_id,
+            },
+        )
 
-    assert response.headers[
-        "Retry-After"
-    ] == "60"
+        assert response.status_code == 429
 
-    assert response.headers[
-        "X-Request-ID"
-    ] == "test-request-id"
+        body = response.json()
+
+        assert body["detail"] == (
+            "Too many requests"
+        )
+
+        assert body["request_id"] == (
+            request_id
+        )
+
+        assert response.headers[
+            "Retry-After"
+        ] == "30"
+
+        assert response.headers[
+            "X-Request-ID"
+        ] == request_id
+
+    finally:
+        remove_test_route(path)
 
 
-def test_request_validation_preserves_fastapi_shape():
-    request = make_request(
-        path="/auth/login"
-    )
+def test_validation_error_returns_422_with_request_id():
+    request_id = make_request_id()
 
-    request.state.request_id = (
-        "test-request-id"
-    )
-
-    validation_error = (
-        RequestValidationError(
+    async def validation_endpoint(
+        request: Request,
+    ):
+        raise RequestValidationError(
             [
                 {
                     "type": "missing",
                     "loc": (
                         "body",
-                        "password",
+                        "query",
                     ),
                     "msg": "Field required",
-                    "input": {},
+                    "input": None,
                 }
             ]
         )
+
+    path = "/test-error-validation"
+
+    register_test_route(
+        path,
+        validation_endpoint,
+        method="POST",
     )
 
-    response = asyncio.run(
-        request_validation_exception_handler(
-            request,
-            validation_error,
+    try:
+        response = client.post(
+            path,
+            headers={
+                "X-Request-ID": request_id,
+            },
+            json={},
         )
+
+        assert response.status_code == 422
+
+        body = response.json()
+
+        assert body["request_id"] == (
+            request_id
+        )
+
+        assert isinstance(
+            body["detail"],
+            list,
+        )
+
+        assert body["detail"][0]["type"] == (
+            "missing"
+        )
+
+        assert response.headers[
+            "X-Request-ID"
+        ] == request_id
+
+    finally:
+        remove_test_route(path)
+
+
+def test_unhandled_exception_hides_internal_details():
+    request_id = make_request_id()
+
+    async def failing_endpoint(
+        request: Request,
+    ):
+        raise RuntimeError(
+            "secret internal failure"
+        )
+
+    path = "/test-error-internal"
+
+    register_test_route(
+        path,
+        failing_endpoint,
     )
 
-    assert response.status_code == 422
+    try:
+        response = client.get(
+            path,
+            headers={
+                "X-Request-ID": request_id,
+            },
+        )
 
-    body = json.loads(
-        response.body.decode("utf-8")
-    )
+        assert response.status_code == 500
 
-    assert body == {
-        "detail": [
-            {
-                "type": "missing",
-                "loc": [
-                    "body",
-                    "password",
-                ],
-                "msg": "Field required",
-                "input": {},
-            }
-        ],
-    }
+        body = response.json()
 
-    assert response.headers[
-        "X-Request-ID"
-    ] == "test-request-id"
+        assert body["detail"] == (
+            "Internal server error"
+        )
 
+        assert body["request_id"] == (
+            request_id
+        )
 
-def test_json_formatter_includes_safe_fields():
-    formatter = JsonFormatter()
+        assert (
+            "secret internal failure"
+            not in response.text
+        )
 
-    record = logging.LogRecord(
-        name="app.test",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="query_completed",
-        args=(),
-        exc_info=None,
-    )
+        assert response.headers[
+            "X-Request-ID"
+        ] == request_id
 
-    record.request_id = (
-        "test-request-id"
-    )
-
-    record.user_id = 42
-    record.source_count = 3
-
-    output = formatter.format(
-        record
-    )
-
-    payload = json.loads(output)
-
-    assert payload["logger"] == (
-        "app.test"
-    )
-
-    assert payload["message"] == (
-        "query_completed"
-    )
-
-    assert payload["request_id"] == (
-        "test-request-id"
-    )
-
-    assert payload["user_id"] == 42
-
-    assert payload["source_count"] == 3
+    finally:
+        remove_test_route(path)

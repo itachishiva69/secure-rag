@@ -527,11 +527,15 @@ def test_reindex_rejects_document_already_processing(
 
         assert response.status_code == 409
 
-        assert response.json() == {
-            "detail": (
-                "Document ingestion is already in progress"
-            )
-        }
+        body = response.json()
+
+        assert body["detail"] == (
+            "Document ingestion is already in progress"
+        )
+        assert body["request_id"]
+        assert response.headers["X-Request-ID"] == (
+            body["request_id"]
+        )
 
     finally:
         app.dependency_overrides.clear()

@@ -160,9 +160,7 @@ def test_admin_uploads_document_and_worker_indexes_it(
         get_current_user
     ] = lambda: admin
 
-    client = TestClient(
-        app
-    )
+    client = TestClient(app)
 
     document_id = None
 
@@ -410,9 +408,7 @@ def test_non_admin_cannot_upload_document(
         get_current_user
     ] = lambda: user
 
-    client = TestClient(
-        app
-    )
+    client = TestClient(app)
 
     try:
         response = client.post(
@@ -433,11 +429,17 @@ def test_non_admin_cannot_upload_document(
 
         assert response.status_code == 403
 
-        assert response.json() == {
-            "detail": (
-                "Admin privileges required"
-            )
-        }
+        body = response.json()
+
+        assert body["detail"] == (
+            "Admin privileges required"
+        )
+
+        assert body["request_id"]
+
+        assert response.headers["X-Request-ID"] == (
+            body["request_id"]
+        )
 
         # No document should have been created.
         documents = db_session.scalars(
@@ -458,6 +460,7 @@ def test_non_admin_cannot_upload_document(
             stored_files = list(
                 test_storage_path.rglob("*")
             )
+
             assert stored_files == []
 
     finally:

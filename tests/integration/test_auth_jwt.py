@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
-import pytest
+
 import jwt
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api import auth as auth_api
@@ -83,6 +84,8 @@ def login(client, email, password):
             "password": password,
         },
     )
+
+
 def disable_login_rate_limiting(monkeypatch):
     limiter = FakeRateLimiter()
 
@@ -108,11 +111,13 @@ class FakeRateLimiter:
     def check(self, *, subject):
         self.calls.append(subject)
 
+
 class FailingRateLimiter:
     def check(self, *, subject):
         raise RateLimitError(
             "simulated redis failure"
         )
+
 
 class ExceededRateLimiter:
     def __init__(self):
@@ -125,6 +130,7 @@ class ExceededRateLimiter:
             limit=5,
             window_seconds=60,
         )
+
 
 @pytest.fixture(autouse=True)
 def isolate_login_rate_limiting(monkeypatch):
@@ -216,9 +222,15 @@ def test_invalid_password_returns_401(
 
     assert response.status_code == 401
 
-    assert response.json() == {
-        "detail": "Invalid email or password"
-    }
+    body = response.json()
+
+    assert body["detail"] == (
+        "Invalid email or password"
+    )
+    assert body["request_id"]
+    assert response.headers["X-Request-ID"] == (
+        body["request_id"]
+    )
 
 
 def test_missing_token_returns_401():
@@ -359,9 +371,15 @@ def test_finance_jwt_cannot_access_engineering_document(
 
     assert response.status_code == 404
 
-    assert response.json() == {
-        "detail": "Document not found"
-    }
+    body = response.json()
+
+    assert body["detail"] == (
+        "Document not found"
+    )
+    assert body["request_id"]
+    assert response.headers["X-Request-ID"] == (
+        body["request_id"]
+    )
 
 
 def test_engineering_jwt_can_access_engineering_document(
@@ -524,16 +542,21 @@ def test_login_rate_limit_returns_429(
 
     assert response.status_code == 429
 
-    assert response.json() == {
-        "detail": (
-            "Too many login attempts. "
-            "Please try again later."
-        )
-    }
+    body = response.json()
 
-    assert response.headers[
-        "Retry-After"
-    ] == "60"
+    assert body["detail"] == (
+        "Too many login attempts. "
+        "Please try again later."
+    )
+    assert body["request_id"]
+
+    assert response.headers["X-Request-ID"] == (
+        body["request_id"]
+    )
+
+    assert response.headers["Retry-After"] == (
+        "60"
+    )
 
 
 def test_login_rate_limit_failure_returns_503(
@@ -567,9 +590,13 @@ def test_login_rate_limit_failure_returns_503(
 
     assert response.status_code == 503
 
-    assert response.json() == {
-        "detail": (
-            "The request protection service "
-            "is temporarily unavailable."
-        )
-    }
+    body = response.json()
+
+    assert body["detail"] == (
+        "The request protection service "
+        "is temporarily unavailable."
+    )
+    assert body["request_id"]
+    assert response.headers["X-Request-ID"] == (
+        body["request_id"]
+    )

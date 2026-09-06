@@ -97,9 +97,16 @@ def test_finance_user_cannot_get_engineering_document(
         )
 
         assert response.status_code == 404
-        assert response.json() == {
-            "detail": "Document not found"
-        }
+
+        body = response.json()
+
+        assert body["detail"] == (
+            "Document not found"
+        )
+        assert body["request_id"]
+        assert response.headers["X-Request-ID"] == (
+            body["request_id"]
+        )
 
     finally:
         app.dependency_overrides.clear()
