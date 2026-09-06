@@ -12,10 +12,15 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U secure_rag -d secure_rag"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U secure_rag -d secure_rag",
+        ]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 5s
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -33,7 +38,223 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "ping",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secure-rag-api
+    restart: unless-stopped
+    environment:
+      APP_NAME: Secure RAG
+      APP_ENV: production
+      DEBUG: "false"
+
+      DATABASE_URL: postgresql+psycopg://secure_rag:secure_rag_dev@postgres:5432/secure_rag
+
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: documents
+
+      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-120}
+
+      REDIS_URL: redis://redis:6379/0
+
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+
+      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L6-v2}
+      RERANKER_CANDIDATE_LIMIT: ${RERANKER_CANDIDATE_LIMIT:-10}
+
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-25}
+      STORAGE_PATH: /app/storage/documents
+
+      QUERY_RATE_LIMIT_REQUESTS: ${QUERY_RATE_LIMIT_REQUESTS:-30}
+      QUERY_RATE_LIMIT_WINDOW_SECONDS: ${QUERY_RATE_LIMIT_WINDOW_SECONDS:-60}
+
+      UPLOAD_RATE_LIMIT_REQUESTS: ${UPLOAD_RATE_LIMIT_REQUESTS:-10}
+      UPLOAD_RATE_LIMIT_WINDOW_SECONDS: ${UPLOAD_RATE_LIMIT_WINDOW_SECONDS:-60}
+
+      CONTEXT_MAX_CHARS: ${CONTEXT_MAX_CHARS:-12000}
+
+      RECONCILIATION_INTERVAL_SECONDS: ${RECONCILIATION_INTERVAL_SECONDS:-300}
+      RECONCILIATION_STALE_PROCESSING_MINUTES: ${RECONCILIATION_STALE_PROCESSING_MINUTES:-30}
+      RECONCILIATION_STALE_DELETING_MINUTES: ${RECONCILIATION_STALE_DELETING_MINUTES:-30}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+
+    ports:
+      - "8001:8000"
+
+    volumes:
+      - app_storage:/app/storage
+
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000",
+      ]
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secure-rag-worker
+    restart: unless-stopped
+    environment:
+      APP_NAME: Secure RAG
+      APP_ENV: production
+      DEBUG: "false"
+
+      DATABASE_URL: postgresql+psycopg://secure_rag:secure_rag_dev@postgres:5432/secure_rag
+
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: documents
+
+      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+
+      REDIS_URL: redis://redis:6379/0
+
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+
+      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L6-v2}
+      RERANKER_CANDIDATE_LIMIT: ${RERANKER_CANDIDATE_LIMIT:-10}
+
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-25}
+      STORAGE_PATH: /app/storage/documents
+
+      QUERY_RATE_LIMIT_REQUESTS: ${QUERY_RATE_LIMIT_REQUESTS:-30}
+      QUERY_RATE_LIMIT_WINDOW_SECONDS: ${QUERY_RATE_LIMIT_WINDOW_SECONDS:-60}
+
+      UPLOAD_RATE_LIMIT_REQUESTS: ${UPLOAD_RATE_LIMIT_REQUESTS:-10}
+      UPLOAD_RATE_LIMIT_WINDOW_SECONDS: ${UPLOAD_RATE_LIMIT_WINDOW_SECONDS:-60}
+
+      CONTEXT_MAX_CHARS: ${CONTEXT_MAX_CHARS:-12000}
+
+      RECONCILIATION_INTERVAL_SECONDS: ${RECONCILIATION_INTERVAL_SECONDS:-300}
+      RECONCILIATION_STALE_PROCESSING_MINUTES: ${RECONCILIATION_STALE_PROCESSING_MINUTES:-30}
+      RECONCILIATION_STALE_DELETING_MINUTES: ${RECONCILIATION_STALE_DELETING_MINUTES:-30}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+
+    volumes:
+      - app_storage:/app/storage
+
+    command:
+      [
+        "python",
+        "-m",
+        "scripts.worker",
+      ]
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secure-rag-scheduler
+    restart: unless-stopped
+    environment:
+      APP_NAME: Secure RAG
+      APP_ENV: production
+      DEBUG: "false"
+
+      DATABASE_URL: postgresql+psycopg://secure_rag:secure_rag_dev@postgres:5432/secure_rag
+
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: documents
+
+      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+
+      REDIS_URL: redis://redis:6379/0
+
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+
+      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L6-v2}
+      RERANKER_CANDIDATE_LIMIT: ${RERANKER_CANDIDATE_LIMIT:-10}
+
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-25}
+      STORAGE_PATH: /app/storage/documents
+
+      QUERY_RATE_LIMIT_REQUESTS: ${QUERY_RATE_LIMIT_REQUESTS:-30}
+      QUERY_RATE_LIMIT_WINDOW_SECONDS: ${QUERY_RATE_LIMIT_WINDOW_SECONDS:-60}
+
+      UPLOAD_RATE_LIMIT_REQUESTS: ${UPLOAD_RATE_LIMIT_REQUESTS:-10}
+      UPLOAD_RATE_LIMIT_WINDOW_SECONDS: ${UPLOAD_RATE_LIMIT_WINDOW_SECONDS:-60}
+
+      CONTEXT_MAX_CHARS: ${CONTEXT_MAX_CHARS:-12000}
+
+      RECONCILIATION_INTERVAL_SECONDS: ${RECONCILIATION_INTERVAL_SECONDS:-300}
+      RECONCILIATION_STALE_PROCESSING_MINUTES: ${RECONCILIATION_STALE_PROCESSING_MINUTES:-30}
+      RECONCILIATION_STALE_DELETING_MINUTES: ${RECONCILIATION_STALE_DELETING_MINUTES:-30}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+
+    volumes:
+      - app_storage:/app/storage
+
+    command:
+      [
+        "python",
+        "-m",
+        "scripts.cron",
+      ]
 
 volumes:
   postgres_data:
   qdrant_data:
+  app_storage:

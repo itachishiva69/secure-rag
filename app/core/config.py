@@ -1,6 +1,9 @@
 from functools import lru_cache
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    SettingsConfigDict,
+)
 
 
 class Settings(BaseSettings):
@@ -20,10 +23,14 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 25
     storage_path: str = "storage/documents"
 
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = (
+        "redis://localhost:6379/0"
+    )
 
     llm_api_key: str | None = None
-    llm_model: str = "openai/gpt-oss-120b"
+    llm_model: str = (
+        "openai/gpt-oss-120b"
+    )
     llm_base_url: str = (
         "https://api.groq.com/openai/v1"
     )
@@ -43,8 +50,11 @@ class Settings(BaseSettings):
     context_max_chars: int = 12000
 
     reconciliation_interval_seconds: int = 300
+
     reconciliation_stale_processing_minutes: int = 30
+
     reconciliation_stale_deleting_minutes: int = 30
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,

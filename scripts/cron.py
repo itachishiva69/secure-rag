@@ -1,45 +1,61 @@
+import logging
+
+from redis import Redis
 from rq.cron import CronScheduler
 
 from app.core.config import get_settings
-from app.services.queue import (
-    MAINTENANCE_QUEUE_NAME,
-    get_redis,
+from app.services.jobs import (
+    dispatch_pending_outbox_job,
+    reconcile_stale_documents_job,
 )
+from app.services.queue import MAINTENANCE_QUEUE_NAME
 
 
-settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
-def main():
-    redis_connection = get_redis()
+def main() -> None:
+    settings = get_settings()
+
+    redis = Redis.from_url(
+        settings.redis_url,
+        decode_responses=False,
+    )
+
+    interval = (
+        settings.reconciliation_interval_seconds
+    )
+
+    if interval <= 0:
+        raise ValueError(
+            "RECONCILIATION_INTERVAL_SECONDS must be greater than zero"
+        )
 
     scheduler = CronScheduler(
-        connection=redis_connection,
-        logging_level="INFO",
+        connection=redis,
+        name="secure-rag-maintenance-scheduler",
     )
 
     scheduler.register(
-        "app.services.jobs.reconcile_stale_documents_job",
-        queue_name=MAINTENANCE_QUEUE_NAME,
-        interval=(
-            settings.reconciliation_interval_seconds
-        ),
-        job_timeout=(
-            settings.reconciliation_interval_seconds
-            * 2
-        ),
+        reconcile_stale_documents_job,
+        MAINTENANCE_QUEUE_NAME,
+        interval=interval,
+        name="secure-rag-document-reconciliation",
     )
 
     scheduler.register(
-        "app.services.jobs.dispatch_pending_outbox_job",
-        queue_name=MAINTENANCE_QUEUE_NAME,
-        interval=60,
-        job_timeout=120,
+        dispatch_pending_outbox_job,
+        MAINTENANCE_QUEUE_NAME,
+        interval=interval,
+        name="secure-rag-outbox-dispatch",
     )
 
-    print(
-        "Starting Secure RAG reconciliation and "
-        "outbox scheduler..."
+    logger.info(
+        "secure_rag_scheduler_started",
+        extra={
+            "queue": MAINTENANCE_QUEUE_NAME,
+            "interval_seconds": interval,
+        },
     )
 
     scheduler.start()
