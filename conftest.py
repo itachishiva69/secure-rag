@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 TEST_DATABASE_URL = (
     "postgresql+psycopg://"
-    "secure_rag:secure_rag_dev"
+    "secure_rag_test:secure_rag_test_dev"
     "@localhost:5433/secure_rag_test"
 )
 
