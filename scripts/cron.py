@@ -4,6 +4,7 @@ from redis import Redis
 from rq.cron import CronScheduler
 
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 from app.services.jobs import (
     dispatch_pending_outbox_job,
     reconcile_stale_documents_job,
@@ -11,11 +12,21 @@ from app.services.jobs import (
 from app.services.queue import MAINTENANCE_QUEUE_NAME
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(
+    "app.scheduler"
+)
 
 
 def main() -> None:
     settings = get_settings()
+
+    configure_logging(
+        debug=getattr(
+            settings,
+            "debug",
+            False,
+        )
+    )
 
     redis = Redis.from_url(
         settings.redis_url,
@@ -28,7 +39,8 @@ def main() -> None:
 
     if interval <= 0:
         raise ValueError(
-            "RECONCILIATION_INTERVAL_SECONDS must be greater than zero"
+            "RECONCILIATION_INTERVAL_SECONDS "
+            "must be greater than zero"
         )
 
     scheduler = CronScheduler(
@@ -51,14 +63,27 @@ def main() -> None:
     )
 
     logger.info(
-        "secure_rag_scheduler_started",
+        "scheduler_started",
         extra={
+            "scheduler_name": (
+                "secure-rag-maintenance-scheduler"
+            ),
             "queue": MAINTENANCE_QUEUE_NAME,
             "interval_seconds": interval,
+            "jobs": [
+                "reconcile_stale_documents_job",
+                "dispatch_pending_outbox_job",
+            ],
         },
     )
 
-    scheduler.start()
+    try:
+        scheduler.start()
+    except Exception:
+        logger.exception(
+            "scheduler_failed"
+        )
+        raise
 
 
 if __name__ == "__main__":
