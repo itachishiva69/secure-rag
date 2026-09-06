@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from qdrant_client import QdrantClient
+from sqlalchemy import text
 
 from app.api.auth import router as auth_router
 from app.api.departments import router as departments_router
@@ -22,6 +23,8 @@ from app.core.request_context import (
     reset_request_id,
     set_request_id,
 )
+from app.db.database import engine
+from app.services.queue import get_redis
 
 
 settings = get_settings()
@@ -80,9 +83,7 @@ class RequestBodyLimitMiddleware:
                 response = JSONResponse(
                     status_code=400,
                     content={
-                        "detail": (
-                            "Invalid Content-Length"
-                        )
+                        "detail": "Invalid Content-Length"
                     },
                 )
 
@@ -97,9 +98,7 @@ class RequestBodyLimitMiddleware:
                 response = JSONResponse(
                     status_code=400,
                     content={
-                        "detail": (
-                            "Invalid Content-Length"
-                        )
+                        "detail": "Invalid Content-Length"
                     },
                 )
 
@@ -130,11 +129,9 @@ class RequestBodyLimitMiddleware:
                 return
 
         received_size = 0
-        body_limit_exceeded = False
 
         async def limited_receive():
             nonlocal received_size
-            nonlocal body_limit_exceeded
 
             message = await receive()
 
@@ -151,22 +148,15 @@ class RequestBodyLimitMiddleware:
             received_size += len(body)
 
             if received_size > self.max_body_size:
-                body_limit_exceeded = True
-
-                return {
-                    "type": "http.disconnect",
-                }
+                raise RequestBodyTooLarge()
 
             return message
-
-        async def limited_send(message):
-            await send(message)
 
         try:
             await self.app(
                 scope,
                 limited_receive,
-                limited_send,
+                send,
             )
 
         except RequestBodyTooLarge:
@@ -424,6 +414,28 @@ async def unhandled_exception_handler(
     return response
 
 
+def check_database() -> None:
+    with engine.connect() as connection:
+        connection.execute(
+            text("SELECT 1")
+        )
+
+
+def check_redis() -> None:
+    get_redis().ping()
+
+
+def check_qdrant() -> None:
+    client = QdrantClient(
+        url=settings.qdrant_url
+    )
+
+    try:
+        client.get_collections()
+    finally:
+        client.close()
+
+
 @app.get("/health")
 def health():
     return {
@@ -432,19 +444,65 @@ def health():
     }
 
 
+@app.get("/ready")
+def readiness():
+    dependency_checks = {
+        "database": check_database,
+        "redis": check_redis,
+        "qdrant": check_qdrant,
+    }
+
+    failed_dependencies = []
+
+    for dependency_name, check in (
+        dependency_checks.items()
+    ):
+        try:
+            check()
+        except Exception:
+            failed_dependencies.append(
+                dependency_name
+            )
+            logger.exception(
+                "readiness_dependency_failed",
+                extra={
+                    "dependency": dependency_name,
+                },
+            )
+
+    if failed_dependencies:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "failed_dependencies": (
+                    failed_dependencies
+                ),
+            },
+        )
+
+    return {
+        "status": "ready",
+    }
+
+
 @app.get("/health/qdrant")
 def qdrant_health():
-    client = QdrantClient(
-        url=settings.qdrant_url
-    )
+    try:
+        check_qdrant()
 
-    collections = (
-        client.get_collections()
-    )
+    except Exception:
+        logger.exception(
+            "qdrant_health_check_failed"
+        )
+
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unavailable",
+            },
+        )
 
     return {
         "status": "ok",
-        "collections": len(
-            collections.collections
-        ),
     }
