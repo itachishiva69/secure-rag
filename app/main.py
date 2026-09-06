@@ -1,15 +1,12 @@
 import logging
+from time import perf_counter
+from uuid import uuid4
+
 from fastapi import (
     FastAPI,
     HTTPException,
     Request,
 )
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from time import perf_counter
-from uuid import uuid4
-
-from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -437,13 +434,18 @@ async def request_validation_exception_handler(
         },
     )
 
+    content = {
+        "detail": jsonable_encoder(
+            exc.errors()
+        ),
+    }
+
+    if request_id:
+        content["request_id"] = request_id
+
     response = JSONResponse(
         status_code=422,
-        content={
-            "detail": jsonable_encoder(
-                exc.errors()
-            )
-        },
+        content=content,
     )
 
     if request_id:
@@ -476,11 +478,16 @@ async def http_exception_handler(
         },
     )
 
+    content = {
+        "detail": exc.detail,
+    }
+
+    if request_id:
+        content["request_id"] = request_id
+
     response = JSONResponse(
         status_code=exc.status_code,
-        content={
-            "detail": exc.detail,
-        },
+        content=content,
         headers=(
             dict(exc.headers)
             if exc.headers
@@ -535,67 +542,6 @@ async def unhandled_exception_handler(
 
     return response
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(
-    request: Request,
-    exc: HTTPException,
-):
-    request_id = getattr(
-        request.state,
-        "request_id",
-        None,
-    )
-
-    content = {
-        "detail": exc.detail,
-    }
-
-    if request_id:
-        content["request_id"] = request_id
-
-    response = JSONResponse(
-        status_code=exc.status_code,
-        content=content,
-        headers=exc.headers,
-    )
-
-    if request_id:
-        response.headers[
-            "X-Request-ID"
-        ] = request_id
-
-    return response
-
-
-@app.exception_handler(RequestValidationError)
-async def request_validation_exception_handler(
-    request: Request,
-    exc: RequestValidationError,
-):
-    request_id = getattr(
-        request.state,
-        "request_id",
-        None,
-    )
-
-    content = {
-        "detail": exc.errors(),
-    }
-
-    if request_id:
-        content["request_id"] = request_id
-
-    response = JSONResponse(
-        status_code=422,
-        content=content,
-    )
-
-    if request_id:
-        response.headers[
-            "X-Request-ID"
-        ] = request_id
-
-    return response
 
 def check_database() -> None:
     with engine.connect() as connection:

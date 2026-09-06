@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 
-TEST_DATABASE_URL = (
+DEFAULT_TEST_DATABASE_URL = (
     "postgresql+psycopg://"
     "secure_rag_test:secure_rag_test_dev"
     "@localhost:5433/secure_rag_test"
@@ -16,8 +16,13 @@ TEST_DATABASE_URL = (
 
 @pytest.fixture(scope="session")
 def test_engine():
+    test_database_url = os.environ.get(
+        "TEST_DATABASE_URL",
+        DEFAULT_TEST_DATABASE_URL,
+    )
+
     return create_engine(
-        TEST_DATABASE_URL,
+        test_database_url,
         pool_pre_ping=True,
     )
 
@@ -28,7 +33,12 @@ def migrate_database():
 
     original_url = os.environ.get("DATABASE_URL")
 
-    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+    test_database_url = os.environ.get(
+        "TEST_DATABASE_URL",
+        DEFAULT_TEST_DATABASE_URL,
+    )
+
+    os.environ["DATABASE_URL"] = test_database_url
     get_settings.cache_clear()
 
     try:
@@ -62,10 +72,6 @@ def db_session(test_engine):
     session = session_factory()
 
     try:
-        # Start each test with a clean database.
-        #
-        # We cannot rely on session.rollback() for isolation because
-        # application services intentionally call db.commit().
         connection.execute(
             text(
                 """
