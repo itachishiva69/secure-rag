@@ -27,7 +27,9 @@ class Settings(BaseSettings):
 
     llm_api_key: str | None = None
     llm_model: str = "openai/gpt-oss-120b"
-    llm_base_url: str = "https://api.groq.com/openai/v1"
+    llm_base_url: str = (
+        "https://api.groq.com/openai/v1"
+    )
     llm_timeout_seconds: float = 30.0
 
     reranker_model: str = (
@@ -46,6 +48,18 @@ class Settings(BaseSettings):
     reconciliation_interval_seconds: int = 300
     reconciliation_stale_processing_minutes: int = 30
     reconciliation_stale_deleting_minutes: int = 30
+
+    cors_allowed_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+    trusted_hosts: list[str] = [
+        "localhost",
+        "127.0.0.1",
+        "testserver",
+        "test",
+    ]
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -70,7 +84,8 @@ class Settings(BaseSettings):
 
         if self.access_token_expire_minutes <= 0:
             raise ValueError(
-                "ACCESS_TOKEN_EXPIRE_MINUTES must be positive"
+                "ACCESS_TOKEN_EXPIRE_MINUTES "
+                "must be positive"
             )
 
         if self.max_upload_size_mb <= 0:
@@ -85,27 +100,32 @@ class Settings(BaseSettings):
 
         if self.reranker_candidate_limit <= 0:
             raise ValueError(
-                "RERANKER_CANDIDATE_LIMIT must be positive"
+                "RERANKER_CANDIDATE_LIMIT "
+                "must be positive"
             )
 
         if self.query_rate_limit_requests <= 0:
             raise ValueError(
-                "QUERY_RATE_LIMIT_REQUESTS must be positive"
+                "QUERY_RATE_LIMIT_REQUESTS "
+                "must be positive"
             )
 
         if self.query_rate_limit_window_seconds <= 0:
             raise ValueError(
-                "QUERY_RATE_LIMIT_WINDOW_SECONDS must be positive"
+                "QUERY_RATE_LIMIT_WINDOW_SECONDS "
+                "must be positive"
             )
 
         if self.upload_rate_limit_requests <= 0:
             raise ValueError(
-                "UPLOAD_RATE_LIMIT_REQUESTS must be positive"
+                "UPLOAD_RATE_LIMIT_REQUESTS "
+                "must be positive"
             )
 
         if self.upload_rate_limit_window_seconds <= 0:
             raise ValueError(
-                "UPLOAD_RATE_LIMIT_WINDOW_SECONDS must be positive"
+                "UPLOAD_RATE_LIMIT_WINDOW_SECONDS "
+                "must be positive"
             )
 
         if self.context_max_chars <= 0:
@@ -115,25 +135,85 @@ class Settings(BaseSettings):
 
         if self.reconciliation_interval_seconds <= 0:
             raise ValueError(
-                "RECONCILIATION_INTERVAL_SECONDS must be positive"
+                "RECONCILIATION_INTERVAL_SECONDS "
+                "must be positive"
             )
 
-        if self.reconciliation_stale_processing_minutes <= 0:
+        if (
+            self.reconciliation_stale_processing_minutes
+            <= 0
+        ):
             raise ValueError(
                 "RECONCILIATION_STALE_PROCESSING_MINUTES "
                 "must be positive"
             )
 
-        if self.reconciliation_stale_deleting_minutes <= 0:
+        if (
+            self.reconciliation_stale_deleting_minutes
+            <= 0
+        ):
             raise ValueError(
                 "RECONCILIATION_STALE_DELETING_MINUTES "
                 "must be positive"
             )
 
+        self._validate_cors_configuration()
+        self._validate_trusted_hosts()
+
         if self.app_env == "production":
             self._validate_production()
 
         return self
+
+    def _validate_cors_configuration(self) -> None:
+        if not self.cors_allowed_origins:
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS must contain "
+                "at least one origin"
+            )
+
+        for origin in self.cors_allowed_origins:
+            parsed = urlparse(origin)
+
+            if parsed.scheme not in {
+                "http",
+                "https",
+            }:
+                raise ValueError(
+                    "CORS_ALLOWED_ORIGINS must contain "
+                    "only http or https origins"
+                )
+
+            if not parsed.netloc:
+                raise ValueError(
+                    "CORS_ALLOWED_ORIGINS contains "
+                    "an invalid origin"
+                )
+
+            if (
+                parsed.path not in {"", "/"}
+                or parsed.params
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "CORS_ALLOWED_ORIGINS must contain "
+                    "origins without paths or query strings"
+                )
+
+    def _validate_trusted_hosts(self) -> None:
+        if not self.trusted_hosts:
+            raise ValueError(
+                "TRUSTED_HOSTS must contain "
+                "at least one host"
+            )
+
+        for host in self.trusted_hosts:
+            if not host.strip():
+                raise ValueError(
+                    "TRUSTED_HOSTS cannot contain "
+                    "empty hosts"
+                )
 
     def _validate_production(self) -> None:
         if self.debug:
@@ -143,7 +223,8 @@ class Settings(BaseSettings):
 
         if len(self.jwt_secret) < 32:
             raise ValueError(
-                "JWT_SECRET must contain at least 32 characters"
+                "JWT_SECRET must contain at least "
+                "32 characters"
             )
 
         if self.jwt_secret in {
@@ -172,7 +253,44 @@ class Settings(BaseSettings):
 
         if not Path(self.storage_path).is_absolute():
             raise ValueError(
-                "STORAGE_PATH must be absolute when APP_ENV=production"
+                "STORAGE_PATH must be absolute when "
+                "APP_ENV=production"
+            )
+
+        default_origins = {
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        }
+
+        if set(self.cors_allowed_origins) == default_origins:
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS must be explicitly "
+                "configured when APP_ENV=production"
+            )
+
+        default_hosts = {
+            "localhost",
+            "127.0.0.1",
+            "testserver",
+            "test",
+        }
+
+        if set(self.trusted_hosts) == default_hosts:
+            raise ValueError(
+                "TRUSTED_HOSTS must be explicitly "
+                "configured when APP_ENV=production"
+            )
+
+        if "*" in self.trusted_hosts:
+            raise ValueError(
+                "TRUSTED_HOSTS must not contain '*' "
+                "when APP_ENV=production"
+            )
+
+        if "*" in self.cors_allowed_origins:
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS must not contain '*' "
+                "when APP_ENV=production"
             )
 
     @staticmethod

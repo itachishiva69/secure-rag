@@ -1,6 +1,8 @@
 import pytest
-
+from pydantic import ValidationError
 from app.core.config import Settings
+
+
 
 
 def make_settings(**overrides):
@@ -138,7 +140,145 @@ def test_valid_production_configuration():
         qdrant_url="https://qdrant.example",
         redis_url="redis://redis.example:6379/0",
         storage_path="/app/storage/documents",
+        cors_allowed_origins=[
+            "https://rag.example.com",
+        ],
+        trusted_hosts=[
+            "rag.example.com",
+        ],
     )
 
     assert settings.app_env == "production"
     assert settings.debug is False
+
+def test_cors_origins_cannot_be_empty(monkeypatch):
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        "[]",
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="CORS_ALLOWED_ORIGINS",
+    ):
+        Settings()
+
+
+def test_cors_origin_must_be_http_or_https(monkeypatch):
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        '["javascript://attacker.example"]',
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="CORS_ALLOWED_ORIGINS",
+    ):
+        Settings()
+
+
+def test_trusted_hosts_cannot_be_empty(monkeypatch):
+    monkeypatch.setenv(
+        "TRUSTED_HOSTS",
+        "[]",
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="TRUSTED_HOSTS",
+    ):
+        Settings()
+
+
+def test_production_cannot_use_wildcard_trusted_host(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "APP_ENV",
+        "production",
+    )
+    monkeypatch.setenv(
+        "DEBUG",
+        "false",
+    )
+    monkeypatch.setenv(
+        "JWT_SECRET",
+        "a" * 64,
+    )
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://user:pass@postgres.example.com/db",
+    )
+    monkeypatch.setenv(
+        "QDRANT_URL",
+        "http://qdrant.example.com",
+    )
+    monkeypatch.setenv(
+        "REDIS_URL",
+        "redis://redis.example.com/0",
+    )
+    monkeypatch.setenv(
+        "STORAGE_PATH",
+        "/srv/secure-rag/storage",
+    )
+    monkeypatch.setenv(
+        "TRUSTED_HOSTS",
+        '["*"]',
+    )
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        '["https://rag.example.com"]',
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="TRUSTED_HOSTS",
+    ):
+        Settings()
+
+
+def test_production_cannot_use_wildcard_cors(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "APP_ENV",
+        "production",
+    )
+    monkeypatch.setenv(
+        "DEBUG",
+        "false",
+    )
+    monkeypatch.setenv(
+        "JWT_SECRET",
+        "a" * 64,
+    )
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://user:pass@postgres.example.com/db",
+    )
+    monkeypatch.setenv(
+        "QDRANT_URL",
+        "http://qdrant.example.com",
+    )
+    monkeypatch.setenv(
+        "REDIS_URL",
+        "redis://redis.example.com/0",
+    )
+    monkeypatch.setenv(
+        "STORAGE_PATH",
+        "/srv/secure-rag/storage",
+    )
+    monkeypatch.setenv(
+        "TRUSTED_HOSTS",
+        '["rag.example.com"]',
+    )
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        '["*"]',
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="CORS_ALLOWED_ORIGINS",
+    ):
+        Settings()

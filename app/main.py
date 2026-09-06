@@ -3,6 +3,8 @@ from time import perf_counter
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from qdrant_client import QdrantClient
 
@@ -15,12 +17,12 @@ from app.core.config import get_settings
 from app.core.logging import (
     configure_logging,
     is_valid_request_id,
-
 )
 from app.core.request_context import (
     reset_request_id,
     set_request_id,
 )
+
 
 settings = get_settings()
 
@@ -32,7 +34,35 @@ logger = logging.getLogger(__name__)
 
 
 app = FastAPI(
-    title=settings.app_name
+    title=settings.app_name,
+)
+
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=settings.trusted_hosts,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins,
+    allow_credentials=False,
+    allow_methods=[
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS",
+    ],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Request-ID",
+    ],
+    expose_headers=[
+        "X-Request-ID",
+    ],
 )
 
 
@@ -52,7 +82,47 @@ app.include_router(
     query_router
 )
 
-app.include_router(users_router)
+app.include_router(
+    users_router
+)
+
+
+@app.middleware("http")
+async def security_headers_middleware(
+    request: Request,
+    call_next,
+):
+    response = await call_next(request)
+
+    response.headers[
+        "X-Content-Type-Options"
+    ] = "nosniff"
+
+    response.headers[
+        "X-Frame-Options"
+    ] = "DENY"
+
+    response.headers[
+        "Referrer-Policy"
+    ] = "no-referrer"
+
+    response.headers[
+        "Permissions-Policy"
+    ] = (
+        "camera=(), "
+        "microphone=(), "
+        "geolocation=()"
+    )
+
+    if settings.app_env == "production":
+        response.headers[
+            "Strict-Transport-Security"
+        ] = (
+            "max-age=31536000; "
+            "includeSubDomains"
+        )
+
+    return response
 
 
 @app.middleware("http")
