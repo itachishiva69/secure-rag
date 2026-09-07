@@ -1,0 +1,47 @@
+groups:
+  - name: secure-rag-operations
+    rules:
+      - alert: SecureRagAPIMetricsUnavailable
+        expr: up{job="secure-rag-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Secure RAG API metrics target is unavailable
+          description: Prometheus cannot scrape the Secure RAG API metrics endpoint.
+
+      - alert: SecureRagStaleProcessingDocuments
+        expr: secure_rag_stale_documents_total{status="processing"} > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Secure RAG has stale processing documents
+          description: One or more documents have remained in processing beyond the configured stale threshold.
+
+      - alert: SecureRagStaleDeletingDocuments
+        expr: secure_rag_stale_documents_total{status="deleting"} > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Secure RAG has stale deleting documents
+          description: One or more documents have remained in deleting state beyond the configured stale threshold.
+
+      - alert: SecureRagPendingOutboxEvents
+        expr: secure_rag_outbox_events_ready > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Secure RAG outbox events are waiting for dispatch
+          description: Pending outbox work has remained ready for dispatch for at least ten minutes.
+
+      - alert: SecureRagOldPendingOutboxEvent
+        expr: secure_rag_outbox_pending_oldest_age_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Secure RAG has an old pending outbox event
+          description: The oldest pending outbox event has been waiting for more than ten minutes.
