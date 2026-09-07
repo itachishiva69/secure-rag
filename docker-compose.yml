@@ -115,6 +115,9 @@ services:
   test-postgres:
     container_name: secure-rag-test-postgres
 
+    profiles:
+      - test
+
     environment:
       POSTGRES_DB: secure_rag_test
       POSTGRES_PASSWORD: secure_rag_test_dev
@@ -154,6 +157,9 @@ services:
   test-qdrant:
     container_name: secure-rag-test-qdrant
 
+    profiles:
+      - test
+
     image: qdrant/qdrant:latest
 
     ports:
@@ -184,6 +190,9 @@ services:
 
   test-redis:
     container_name: secure-rag-test-redis
+
+    profiles:
+      - test
 
     image: redis:7-alpine
 
