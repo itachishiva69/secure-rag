@@ -533,10 +533,11 @@ The following recovery procedures have been exercised successfully against
 the production backup created during Phase 8:
 
 ```text
-PostgreSQL restore     ✅
-Document restore       ✅
-Qdrant restore         ✅
-SHA-256 verification   ✅
+PostgreSQL restore         ✅
+Document restore           ✅
+Qdrant restore             ✅
+SHA-256 verification       ✅
+Remote S3 restore drill    ✅
 ```
 
 The verified backup included:
@@ -548,6 +549,10 @@ Full Qdrant storage snapshot
 Backup metadata
 SHA-256 manifest
 ```
+
+The remote archive was synchronized to an isolated restore location and
+checksum verification succeeded before the individual PostgreSQL, document,
+and Qdrant restore drills were performed.
 
 The live production services remained untouched during the restore drills.
 
@@ -772,15 +777,173 @@ application state.
 
 # Backup Retention
 
-The current backup script creates timestamped backups but does not yet perform
-automatic retention or remote archival.
+Production backups are archived outside the application host using Amazon S3.
 
-For production operations, backups should eventually be copied to storage
-outside the application host.
+The remote backup location is configured through:
 
-Until remote backup archival and retention automation are implemented, the
-local backup directory should not be considered sufficient protection against
-loss of the production host itself.
+```text
+BACKUP_REMOTE_URI=s3://<bucket>/secure-rag/production
+```
+
+Remote archival is performed by:
+
+```bash
+./scripts/archive_backup.sh backups/<TIMESTAMP>
+```
+
+The archival process uploads the complete verified backup directory and
+verifies the uploaded objects against the local backup checksums.
+
+The production remote archive contains the same logical backup contents as the
+local verified backup:
+
+```text
+backup.info
+documents/
+postgres/database.sql.gz
+qdrant/<SNAPSHOT_FILE>
+sha256sums.txt
+```
+
+The remote S3 bucket is hardened with:
+
+* S3 Block Public Access enabled;
+* S3 Object Ownership set to `BucketOwnerEnforced`;
+* default SSE-S3 encryption;
+* bucket versioning enabled;
+* no public bucket policy;
+* access restricted to the dedicated backup role.
+
+Backup operations use the dedicated `SecureRAGBackupRole`.
+
+The role is assumed through the dedicated `secure-rag-backup-cli` IAM user
+and requires MFA.
+
+The backup role is restricted to the production backup prefix and provides only
+the S3 permissions required for backup archival, verification, listing, and
+normal cleanup.
+
+The backup role does not have `s3:DeleteObjectVersion`.
+
+Permanent deletion of old object versions is therefore delegated to the S3
+lifecycle configuration rather than allowing the backup automation to remove
+object versions directly.
+
+---
+
+## Remote Backup Archival
+
+Archive a verified local backup:
+
+```bash
+BACKUP_REMOTE_URI="s3://<bucket>/secure-rag/production" \
+AWS_PROFILE=secure-rag-backup \
+./scripts/archive_backup.sh backups/<TIMESTAMP>
+```
+
+A successful archival operation must:
+
+1. identify a valid local backup;
+2. verify the local SHA-256 manifest;
+3. upload the complete backup contents;
+4. verify the remote object set;
+5. preserve the backup metadata and checksum manifest.
+
+Remote archival has been validated successfully against the production backup
+created during Phase 8.
+
+---
+
+## Remote Backup Verification
+
+A remote backup should be synchronized to an isolated location before a remote
+restore drill:
+
+```bash
+rm -rf /tmp/secure-rag-remote-restore
+mkdir -p /tmp/secure-rag-remote-restore
+
+AWS_PROFILE=secure-rag-backup \
+aws s3 sync \
+  "s3://<bucket>/secure-rag/production/<TIMESTAMP>/" \
+  /tmp/secure-rag-remote-restore/
+```
+
+Verify the restored archive contents and checksums:
+
+```bash
+cd /tmp/secure-rag-remote-restore
+
+sha256sum -c sha256sums.txt
+```
+
+The remote restore drill should then use the recovered backup directory as the
+input to the PostgreSQL, document, and Qdrant isolated restore procedures.
+
+The remote restore drill completed successfully for the verified production
+backup. The remote archive contained the expected six backup objects and the
+downloaded contents passed checksum verification before restore testing.
+
+---
+
+## Remote Backup Retention
+
+Remote cleanup is performed by:
+
+```bash
+./scripts/cleanup_remote_backups.sh
+```
+
+The cleanup process identifies expired timestamped backup generations and
+performs normal object deletion for the configured production backup prefix.
+
+S3 versioning provides an additional recovery layer by retaining previous
+object versions after normal deletion.
+
+The backup role intentionally does not have permission to permanently delete
+object versions.
+
+---
+
+## S3 Lifecycle Retention
+
+The production backup prefix is covered by an S3 lifecycle configuration.
+
+Current lifecycle behavior:
+
+```text
+Current object expiration            30 days
+Noncurrent version expiration        30 days
+Expired delete markers               removed
+Incomplete multipart uploads         aborted after 7 days
+```
+
+Current-object expiration and noncurrent-version expiration are lifecycle
+eligibility periods. S3 lifecycle processing is asynchronous and deletion does
+not necessarily occur at the exact expiration timestamp.
+
+Because S3 versioning is enabled, normal object deletion may create a delete
+marker. Older object versions remain available until the lifecycle policy
+makes them eligible for removal.
+
+The dedicated backup role cannot bypass this control by calling
+`s3:DeleteObjectVersion`.
+
+The remote S3 archive therefore provides protection against loss of the
+production application host while retaining version-aware lifecycle controls.
+
+---
+
+## Local Backup Retention
+
+The local `backups/` directory remains useful for operational recovery and
+short-term investigation.
+
+Production backups must not be treated as protected against host loss unless
+the corresponding backup has also been successfully archived remotely.
+
+A verified remote archive should exist before considering the backup workflow
+complete.
 
 ---
 
@@ -797,7 +960,9 @@ PostgreSQL restore drill            ✅
 Document restore drill              ✅
 Qdrant restore drill                ✅
 Operational runbook                 ✅
-Remote backup archival              ⬜
-Automated backup retention          ⬜
-Final production review             ⬜
+Remote backup archival              ✅
+Remote backup restore drill         ✅
+Automated backup retention          ✅
+S3 lifecycle retention              ✅
+Final production review             ⏳
 ```

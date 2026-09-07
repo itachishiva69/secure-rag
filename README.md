@@ -8,7 +8,9 @@ The project is intentionally developed beyond a minimal RAG demo. Authorization,
 
 ## Project Status
 
-The core backend and operational foundation are implemented.
+The production-style backend, operational foundation, observability stack,
+backup/restore workflow, and security/reliability validation are implemented.
+The final production review is the current checkpoint before frontend work.
 
 ```text
 1. Core Application                    ✅ Complete
@@ -16,11 +18,11 @@ The core backend and operational foundation are implemented.
 3. Document Lifecycle & Consistency    ✅ Complete
 4. RAG Failure Handling                ✅ Complete
 5. API & Application Hardening         ✅ Complete
-6. Observability & Operations          🚧 In Progress
-7. Security & Reliability Testing      🚧 Partial
-8. Production Deployment               ⬜ Not Started
+6. Observability & Operations          ✅ Complete
+7. Security & Reliability Testing      ✅ Complete
+8. Production Deployment               ✅ Complete
 9. Frontend                            ⬜ Not Started
-10. Final Production Review             ⬜ Not Started
+10. Final Production Review             🚧 In Progress
 ```
 
 ---
@@ -420,9 +422,12 @@ secure_rag_rq_queue_depth
 secure_rag_metrics_collections_total
 ```
 
-These metrics are intended to support operational monitoring and future Prometheus/Grafana deployment.
+These metrics support the deployed Prometheus/Grafana observability
+stack and provide operational monitoring and alert-oriented visibility.
 
-Prometheus/Grafana deployment itself is intentionally deferred to the production deployment phase.
+Prometheus and Grafana are deployed as part of the production observability
+stack. Prometheus scrapes the API metrics endpoint, and the observability
+services are host-published only on localhost.
 
 ---
 
@@ -872,7 +877,7 @@ This keeps each hardening step isolated and reviewable.
        ✅ Complete
 
 6. Observability & Operations
-       🚧 In Progress
+       ✅ Complete
        ├── 6.1 Observability baseline
        ├── 6.2 Operational metrics
        ├── 6.3 Metrics hardening
@@ -880,16 +885,25 @@ This keeps each hardening step isolated and reviewable.
        └── 6.5 Operational runbook
 
 7. Security & Reliability Testing
-       🚧 Partial
+       ✅ Complete
+       ├── 7.1 Full test suite
+       ├── 7.2 Production configuration validation
+       ├── 7.3 PostgreSQL restore drill
+       ├── 7.4 Document restore drill
+       ├── 7.5 Qdrant restore drill
+       └── 7.6 Remote backup restore drill
 
 8. Production Deployment
-       ⬜ Not Started
+       ✅ Complete
+       ├── 8.1 Production Docker deployment
+       ├── 8.2 Prometheus / Grafana observability
+       └── 8.3 Remote backup archival and retention
 
 9. Frontend
        ⬜ Not Started
 
 10. Final Production Review
-       ⬜ Not Started
+       🚧 In Progress
 ```
 
 ---
