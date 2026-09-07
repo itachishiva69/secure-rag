@@ -143,7 +143,7 @@ services:
   qdrant:
     container_name: secure-rag-qdrant
 
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.19.1
 
     restart: unless-stopped
 
