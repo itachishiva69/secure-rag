@@ -2,20 +2,23 @@
 
 ## Purpose
 
-This document describes the operational signals, checks, and recovery actions for the Secure RAG application.
+This document describes the operational signals, checks, backup procedures,
+recovery procedures, and common recovery actions for the Secure RAG
+application.
 
 The application consists of:
 
-- FastAPI API
-- PostgreSQL
-- Qdrant
-- Redis
-- RQ worker
-- RQ maintenance scheduler
-- durable PostgreSQL outbox
-- shared application storage
+* FastAPI API
+* PostgreSQL
+* Qdrant
+* Redis
+* RQ worker
+* RQ maintenance scheduler
+* durable PostgreSQL outbox
+* shared application storage
 
-Production service communication between PostgreSQL, Qdrant, Redis, the worker, scheduler, and API occurs over the Docker Compose network.
+Production service communication between PostgreSQL, Qdrant, Redis, the
+worker, scheduler, and API occurs over the Docker Compose network.
 
 Only the API is host-published.
 
@@ -27,3 +30,774 @@ Expected production host exposure:
 
 ```text
 127.0.0.1:8001 -> API container:8000
+```
+
+PostgreSQL, Qdrant, Redis, worker, and scheduler are not intended to be
+directly exposed on the production host.
+
+Check the current production service state:
+
+```bash
+docker compose ps
+```
+
+Expected production services:
+
+```text
+postgres
+qdrant
+redis
+api
+worker
+scheduler
+```
+
+Test infrastructure is isolated behind the Docker Compose `test` profile and
+should not be considered part of the normal production runtime.
+
+---
+
+## Health and Readiness
+
+### API health
+
+```bash
+curl http://127.0.0.1:8001/health
+```
+
+Expected result:
+
+```json
+{
+  "status": "ok",
+  "environment": "production"
+}
+```
+
+### API readiness
+
+```bash
+curl http://127.0.0.1:8001/ready
+```
+
+Expected result:
+
+```json
+{
+  "status": "ready"
+}
+```
+
+Readiness is the stronger operational check because it verifies that the
+application is able to operate with its required dependencies.
+
+### Qdrant health
+
+```bash
+curl http://127.0.0.1:8001/health/qdrant
+```
+
+Expected result:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+### Container health
+
+```bash
+docker compose ps
+```
+
+The API, PostgreSQL, and Redis containers should report healthy status.
+
+Qdrant currently relies on application-level dependency/readiness checks rather
+than a container-level HTTP healthcheck.
+
+---
+
+## Logs
+
+Inspect the API:
+
+```bash
+docker compose logs --tail=200 api
+```
+
+Inspect the worker:
+
+```bash
+docker compose logs --tail=200 worker
+```
+
+Inspect the scheduler:
+
+```bash
+docker compose logs --tail=200 scheduler
+```
+
+Inspect PostgreSQL:
+
+```bash
+docker compose logs --tail=200 postgres
+```
+
+Inspect Qdrant:
+
+```bash
+docker compose logs --tail=200 qdrant
+```
+
+Inspect Redis:
+
+```bash
+docker compose logs --tail=200 redis
+```
+
+Follow a service continuously:
+
+```bash
+docker compose logs -f api
+```
+
+or:
+
+```bash
+docker compose logs -f worker
+```
+
+---
+
+## Durable Data Model
+
+The recovery strategy follows the application's data model.
+
+```text
+PostgreSQL
+    |
+    +-- authoritative application metadata and workflow state
+    |
+    +-- durable outbox
+
+/app/storage/documents
+    |
+    +-- original uploaded document files
+
+Qdrant
+    |
+    +-- derived vector/index state
+
+Redis / RQ
+    |
+    +-- transient queue state
+```
+
+PostgreSQL is the authoritative source for application state.
+
+Document files are durable application data and must be included in
+production backups.
+
+Qdrant contains derived retrieval state. It is backed up to provide a fast
+recovery path, but it can be rebuilt from durable application data if necessary.
+
+Redis/RQ queue state is transient and is intentionally not included in the
+backup procedure.
+
+The durable PostgreSQL outbox is the mechanism for preserving asynchronous
+work intent across queue interruptions.
+
+---
+
+# Backup Operations
+
+## Production Backup
+
+The production backup script creates a timestamped backup directory containing:
+
+```text
+backups/<timestamp>/
+├── backup.info
+├── sha256sums.txt
+├── postgres/
+│   └── database.sql.gz
+├── documents/
+│   └── documents/
+└── qdrant/
+    └── qdrant_<snapshot>.snapshot.snapshot
+```
+
+Run:
+
+```bash
+./scripts/backup.sh
+```
+
+The script performs:
+
+1. PostgreSQL readiness verification.
+2. API readiness verification.
+3. PostgreSQL logical backup using `pg_dump`.
+4. Uploaded document backup.
+5. Full Qdrant storage snapshot creation.
+6. Qdrant snapshot download.
+7. Backup metadata generation.
+8. SHA-256 checksum generation.
+
+The generated backup is written under:
+
+```text
+backups/<YYYYMMDD_HHMMSS>/
+```
+
+The `backups/` directory is intentionally ignored by Git.
+
+Do not commit production backup contents to the repository.
+
+---
+
+## Backup Verification
+
+After creating a backup, verify its checksums.
+
+Example:
+
+```bash
+cd backups/<TIMESTAMP>
+
+sha256sum -c sha256sums.txt
+```
+
+Every backed-up file should report:
+
+```text
+OK
+```
+
+A valid backup should contain at least:
+
+```text
+backup.info
+sha256sums.txt
+postgres/database.sql.gz
+documents/documents/<uploaded files>
+qdrant/<full snapshot>
+```
+
+Inspect metadata:
+
+```bash
+cat backup.info
+```
+
+Inspect backup size:
+
+```bash
+du -sh .
+```
+
+A backup should not be considered verified until:
+
+* the backup script completes successfully;
+* the expected PostgreSQL dump exists;
+* the expected document files exist;
+* the Qdrant snapshot exists;
+* checksum verification succeeds.
+
+---
+
+# Restore Operations
+
+Restore procedures should be performed in an isolated environment whenever
+possible.
+
+Do not overwrite production PostgreSQL or Qdrant data during a restore drill.
+
+---
+
+## PostgreSQL Restore
+
+The PostgreSQL backup is a plain SQL dump compressed with gzip.
+
+Create an isolated PostgreSQL instance:
+
+```bash
+docker run -d \
+  --name secure-rag-postgres-restore-test \
+  -e POSTGRES_DB=restore_test \
+  -e POSTGRES_USER=restore_test \
+  -e POSTGRES_PASSWORD=restore_test \
+  -p 55432:5432 \
+  postgres:16.15
+```
+
+Wait for readiness:
+
+```bash
+until docker exec secure-rag-postgres-restore-test \
+  pg_isready -U restore_test -d restore_test >/dev/null 2>&1
+do
+    sleep 1
+done
+```
+
+Restore the compressed SQL dump:
+
+```bash
+gunzip -c \
+  <BACKUP_DIR>/postgres/database.sql.gz |
+docker exec -i secure-rag-postgres-restore-test \
+  psql -U restore_test -d restore_test
+```
+
+Verify the restored tables:
+
+```bash
+docker exec secure-rag-postgres-restore-test \
+  psql -U restore_test -d restore_test \
+  -c '\dt'
+```
+
+Verify the public tables explicitly:
+
+```bash
+docker exec secure-rag-postgres-restore-test \
+  psql -U restore_test -d restore_test \
+  -c 'SELECT schemaname, tablename
+      FROM pg_tables
+      WHERE schemaname = '\''public'\''
+      ORDER BY tablename;'
+```
+
+Clean up the isolated database:
+
+```bash
+docker rm -f secure-rag-postgres-restore-test
+```
+
+A successful restore drill should show the application's expected tables,
+including:
+
+```text
+alembic_version
+audit_logs
+departments
+document_departments
+documents
+outbox_events
+users
+```
+
+---
+
+## Document Restore
+
+Uploaded document files are backed up separately from PostgreSQL.
+
+Restore them into an isolated directory first:
+
+```bash
+rm -rf /tmp/secure-rag-documents-restore
+mkdir -p /tmp/secure-rag-documents-restore
+
+cp -a \
+  <BACKUP_DIR>/documents/documents/. \
+  /tmp/secure-rag-documents-restore/
+```
+
+Inspect the restored files:
+
+```bash
+find /tmp/secure-rag-documents-restore \
+  -type f \
+  -printf '%P\n' |
+  sort
+```
+
+Verify the backup integrity:
+
+```bash
+cd <BACKUP_DIR>
+
+sha256sum -c sha256sums.txt
+```
+
+Do not copy restored files directly over production storage until the
+production recovery procedure has been deliberately approved.
+
+---
+
+## Qdrant Restore
+
+Qdrant is restored from a full storage snapshot.
+
+Use the same Qdrant minor version as the production snapshot whenever possible.
+
+For an isolated restore drill, create a Docker volume:
+
+```bash
+docker volume create secure-rag-qdrant-restore-test
+```
+
+Start a temporary preparation container:
+
+```bash
+docker run -d \
+  --name secure-rag-qdrant-restore-prep \
+  -v secure-rag-qdrant-restore-test:/qdrant/snapshots \
+  alpine:3.22 \
+  sleep 300
+```
+
+Copy the snapshot into the Docker volume:
+
+```bash
+docker cp \
+  <BACKUP_DIR>/qdrant/<SNAPSHOT_FILE> \
+  secure-rag-qdrant-restore-prep:/qdrant/snapshots/full-snapshot.snapshot
+```
+
+Set readable permissions:
+
+```bash
+docker exec secure-rag-qdrant-restore-prep \
+  chmod 644 /qdrant/snapshots/full-snapshot.snapshot
+```
+
+Verify the snapshot:
+
+```bash
+docker exec secure-rag-qdrant-restore-prep \
+  ls -lh /qdrant/snapshots/full-snapshot.snapshot
+```
+
+Remove the preparation container:
+
+```bash
+docker rm -f secure-rag-qdrant-restore-prep
+```
+
+Start Qdrant using the snapshot:
+
+```bash
+docker run -d \
+  --name secure-rag-qdrant-restore-test \
+  -p 6335:6333 \
+  -v secure-rag-qdrant-restore-test:/qdrant/snapshots \
+  qdrant/qdrant:v1.19.1 \
+  ./qdrant \
+  --storage-snapshot /qdrant/snapshots/full-snapshot.snapshot
+```
+
+Inspect startup:
+
+```bash
+docker logs secure-rag-qdrant-restore-test
+```
+
+Verify the restored collections:
+
+```bash
+curl http://127.0.0.1:6335/collections
+```
+
+The expected recovery result is that the application collection is available,
+for example:
+
+```json
+{
+  "result": {
+    "collections": [
+      {
+        "name": "documents"
+      }
+    ]
+  },
+  "status": "ok"
+}
+```
+
+Clean up the isolated restore environment:
+
+```bash
+docker rm -f secure-rag-qdrant-restore-test
+docker volume rm secure-rag-qdrant-restore-test
+```
+
+---
+
+# Verified Recovery Checkpoint
+
+The following recovery procedures have been exercised successfully against
+the production backup created during Phase 8:
+
+```text
+PostgreSQL restore     ✅
+Document restore       ✅
+Qdrant restore         ✅
+SHA-256 verification   ✅
+```
+
+The verified backup included:
+
+```text
+PostgreSQL database dump
+Uploaded document files
+Full Qdrant storage snapshot
+Backup metadata
+SHA-256 manifest
+```
+
+The live production services remained untouched during the restore drills.
+
+---
+
+# Outbox and Worker Operations
+
+The PostgreSQL outbox is durable application state.
+
+The worker consumes asynchronous work from the queue and processes document
+lifecycle operations.
+
+When queue infrastructure is interrupted, the durable outbox preserves work
+intent so that operations can be recovered.
+
+Inspect worker logs:
+
+```bash
+docker compose logs --tail=200 worker
+```
+
+Inspect scheduler logs:
+
+```bash
+docker compose logs --tail=200 scheduler
+```
+
+When investigating document processing problems, inspect:
+
+1. document state in PostgreSQL;
+2. corresponding outbox state;
+3. worker logs;
+4. Qdrant collection state.
+
+Do not manually modify PostgreSQL lifecycle state unless performing an approved
+incident recovery procedure.
+
+---
+
+# Document Lifecycle Incidents
+
+The application uses explicit document lifecycle states.
+
+When a document appears stuck:
+
+1. Inspect the document state in PostgreSQL.
+2. Inspect the associated durable outbox event.
+3. Inspect worker logs.
+4. Inspect Qdrant state if the operation involves vectors.
+5. Allow the application's reconciliation mechanisms to handle stale states
+   where applicable.
+
+Do not treat Qdrant alone as the authoritative state of a document.
+
+---
+
+# Application Restart
+
+A normal production restart:
+
+```bash
+docker compose restart api worker scheduler
+```
+
+If the entire application stack needs to be recreated:
+
+```bash
+docker compose up -d
+```
+
+Then verify:
+
+```bash
+docker compose ps
+```
+
+and:
+
+```bash
+curl http://127.0.0.1:8001/health
+curl http://127.0.0.1:8001/ready
+curl http://127.0.0.1:8001/health/qdrant
+```
+
+Do not delete persistent PostgreSQL, Qdrant, or application-storage data merely
+to resolve an application startup problem.
+
+---
+
+# Production Configuration Checks
+
+Production containers require critical configuration to be provided through
+environment configuration.
+
+Before a production deployment:
+
+```bash
+docker compose config >/dev/null
+```
+
+This should succeed with the intended production environment configuration.
+
+To verify fail-fast behavior when required configuration is absent:
+
+```bash
+docker compose --env-file /dev/null config
+```
+
+This should fail rather than silently supplying unsafe production defaults.
+
+Never commit:
+
+```text
+.env
+```
+
+or production credentials into the repository.
+
+Secrets such as:
+
+```text
+POSTGRES_PASSWORD
+JWT_SECRET
+LLM_API_KEY
+```
+
+must be supplied through the production environment configuration.
+
+---
+
+# Test Infrastructure
+
+Test PostgreSQL, Qdrant, and Redis are isolated behind the Docker Compose
+`test` profile.
+
+Production services:
+
+```bash
+docker compose config --services
+```
+
+should list the normal production services.
+
+The test profile can be inspected with:
+
+```bash
+docker compose --profile test config --services
+```
+
+The test services must not be treated as production dependencies.
+
+---
+
+# Operational Validation
+
+Before declaring a production deployment operational, verify:
+
+```bash
+docker compose ps
+```
+
+Then:
+
+```bash
+curl http://127.0.0.1:8001/health
+curl http://127.0.0.1:8001/ready
+curl http://127.0.0.1:8001/health/qdrant
+```
+
+Verify application logs:
+
+```bash
+docker compose logs --tail=200 api
+docker compose logs --tail=200 worker
+docker compose logs --tail=200 scheduler
+```
+
+Verify the test suite from the development environment:
+
+```bash
+pytest -q
+```
+
+The production deployment should not be considered complete if:
+
+* required production configuration is missing;
+* API readiness fails;
+* PostgreSQL is unavailable;
+* Qdrant is unavailable;
+* worker or scheduler is continuously failing;
+* backup verification fails;
+* restore verification has not been demonstrated.
+
+---
+
+# Incident Recovery Principles
+
+When diagnosing production failures:
+
+```text
+1. Preserve durable data.
+2. Identify the failing layer.
+3. Check application readiness.
+4. Check PostgreSQL state.
+5. Check outbox/work queue state.
+6. Check worker/scheduler state.
+7. Check document storage.
+8. Check Qdrant derived state.
+9. Restore from verified backups when required.
+```
+
+Do not destroy application data as a first troubleshooting step.
+
+Do not treat Redis queue state as the authoritative record of pending work.
+
+Do not treat Qdrant as the authoritative record of document lifecycle state.
+
+PostgreSQL and the original document storage are the primary durable
+application state.
+
+---
+
+# Backup Retention
+
+The current backup script creates timestamped backups but does not yet perform
+automatic retention or remote archival.
+
+For production operations, backups should eventually be copied to storage
+outside the application host.
+
+Until remote backup archival and retention automation are implemented, the
+local backup directory should not be considered sufficient protection against
+loss of the production host itself.
+
+---
+
+# Current Phase 8 Operational Status
+
+```text
+Docker hardening                    ✅
+Production image pinning            ✅
+Test service isolation              ✅
+Required production configuration   ✅
+Production backup                   ✅
+Backup integrity verification       ✅
+PostgreSQL restore drill            ✅
+Document restore drill              ✅
+Qdrant restore drill                ✅
+Operational runbook                 ✅
+Remote backup archival              ⬜
+Automated backup retention          ⬜
+Final production review             ⬜
+```
