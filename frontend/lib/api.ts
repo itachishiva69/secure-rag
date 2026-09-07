@@ -30,7 +30,7 @@ async function parseError(response: Response): Promise<string> {
       return body.detail;
     }
   } catch {
-    // Fall through to a generic message.
+    // Fall through to a generic error message.
   }
 
   return `Request failed with status ${response.status}`;
@@ -117,9 +117,7 @@ export async function listDocuments(
 }
 
 export async function getDocumentDepartments(): Promise<Department[]> {
-  // Keep the browser-facing path slash-free so Next.js does not issue a
-  // redirect before the dedicated proxy rule maps it to FastAPI /departments/.
-  return request<Department[]>("/departments");
+  return request<Department[]>("/departments/");
 }
 
 export async function uploadDocument(
@@ -136,12 +134,22 @@ export async function uploadDocument(
   });
 }
 
+export async function reindexDocument(documentId: number): Promise<Document> {
+  return request<Document>(`/documents/${documentId}/reindex`, {
+    method: "POST",
+  });
+}
+
+export async function deleteDocument(documentId: number): Promise<void> {
+  return request<void>(`/documents/${documentId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function submitQuery(
   query: string,
   limit = 5,
 ): Promise<QueryResponse> {
-  // Keep the browser-facing path slash-free so the dedicated proxy rule
-  // maps it directly to the canonical FastAPI POST /query/ route.
   return request<QueryResponse>("/query", {
     method: "POST",
     headers: {

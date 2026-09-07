@@ -12,9 +12,11 @@ import {
 import { useRouter } from "next/navigation";
 import {
   ApiError,
+  deleteDocument,
   getCurrentUser,
   getDocumentDepartments,
   listDocuments,
+  reindexDocument,
   uploadDocument,
 } from "../../lib/api";
 import { getAccessToken } from "../../lib/auth";
@@ -36,6 +38,7 @@ function statusClass(status: string): string {
       return "badge badge-success";
     case "processing":
     case "uploaded":
+    case "deleting":
       return "badge badge-warning";
     case "failed":
       return "badge badge-danger";
@@ -75,6 +78,43 @@ function uploadErrorMessage(error: unknown): string {
     : "Unable to upload the document.";
 }
 
+function actionErrorMessage(action: "reindex" | "delete", error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 403) {
+      return "Only administrators can manage documents.";
+    }
+
+    if (error.status === 404) {
+      return "The document no longer exists.";
+    }
+
+    if (error.status === 409) {
+      return error.detail || "The document is not ready for this action.";
+    }
+
+    if (error.status === 429) {
+      return "Too many requests. Please wait a moment and try again.";
+    }
+
+    if (error.status === 503) {
+      return (
+        error.detail ||
+        "The document service is temporarily unavailable. Please try again."
+      );
+    }
+
+    return error.detail;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return action === "reindex"
+    ? "Unable to reindex the document."
+    : "Unable to delete the document.";
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -87,15 +127,20 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<number[]>(
-    [],
-  );
+  const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<number[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [uploadSuccess, setUploadSuccess] = useState("");
 
+  const [busyDocumentId, setBusyDocumentId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState("");
+  const [actionSuccess, setActionSuccess] = useState("");
+
   const departmentNameById = useMemo(
-    () => new Map(departments.map((department) => [department.id, department.name])),
+    () =>
+      new Map(
+        departments.map((department) => [department.id, department.name]),
+      ),
     [departments],
   );
 
@@ -123,10 +168,7 @@ export default function DashboardPage() {
         setDepartments([]);
       }
     } catch (requestError) {
-      if (
-        requestError instanceof ApiError &&
-        requestError.status === 401
-      ) {
+      if (requestError instanceof ApiError && requestError.status === 401) {
         router.replace("/login");
         return;
       }
@@ -230,10 +272,7 @@ export default function DashboardPage() {
       resetUploadForm();
       await loadDashboard();
     } catch (requestError) {
-      if (
-        requestError instanceof ApiError &&
-        requestError.status === 401
-      ) {
+      if (requestError instanceof ApiError && requestError.status === 401) {
         router.replace("/login");
         return;
       }
@@ -244,13 +283,80 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleReindex(document: Document) {
+    if (
+      !window.confirm(
+        `Reindex "${document.filename}"?\n\nThis will enqueue the document for ingestion again.`,
+      )
+    ) {
+      return;
+    }
+
+    setBusyDocumentId(document.id);
+    setActionError("");
+    setActionSuccess("");
+
+    try {
+      const updatedDocument = await reindexDocument(document.id);
+
+      setActionSuccess(
+        `${updatedDocument.filename} reindex requested successfully. Current status: ${updatedDocument.status}.`,
+      );
+      await loadDashboard();
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        router.replace("/login");
+        return;
+      }
+
+      setActionError(actionErrorMessage("reindex", requestError));
+    } finally {
+      setBusyDocumentId(null);
+    }
+  }
+
+  async function handleDelete(document: Document) {
+    if (
+      !window.confirm(
+        `Delete "${document.filename}"?\n\nThis action cannot be undone from the dashboard.`,
+      )
+    ) {
+      return;
+    }
+
+    setBusyDocumentId(document.id);
+    setActionError("");
+    setActionSuccess("");
+
+    try {
+      await deleteDocument(document.id);
+
+      setActionSuccess(
+        `${document.filename} deletion requested successfully.`,
+      );
+      await loadDashboard();
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        router.replace("/login");
+        return;
+      }
+
+      setActionError(actionErrorMessage("delete", requestError));
+    } finally {
+      setBusyDocumentId(null);
+    }
+  }
+
   function renderDepartments(document: Document): string {
     if (document.department_ids.length === 0) {
       return "—";
     }
 
     return document.department_ids
-      .map((departmentId) => departmentNameById.get(departmentId) ?? `Dept #${departmentId}`)
+      .map(
+        (departmentId) =>
+          departmentNameById.get(departmentId) ?? `Dept #${departmentId}`,
+      )
       .join(", ");
   }
 
@@ -340,7 +446,9 @@ export default function DashboardPage() {
 
                     return (
                       <label
-                        className={`department-option${checked ? " department-option-selected" : ""}`}
+                        className={`department-option${
+                          checked ? " department-option-selected" : ""
+                        }`}
                         key={department.id}
                       >
                         <input
@@ -409,7 +517,7 @@ export default function DashboardPage() {
             className="button button-secondary"
             type="button"
             onClick={() => void loadDashboard()}
-            disabled={loading || uploading}
+            disabled={loading || uploading || busyDocumentId !== null}
           >
             {loading ? "Refreshing…" : "Refresh"}
           </button>
@@ -418,6 +526,18 @@ export default function DashboardPage() {
         {error ? (
           <div className="page-alert page-alert-error" role="alert">
             {error}
+          </div>
+        ) : null}
+
+        {actionError ? (
+          <div className="page-alert page-alert-error" role="alert">
+            <strong>Document action failed.</strong> {actionError}
+          </div>
+        ) : null}
+
+        {actionSuccess ? (
+          <div className="page-alert page-alert-success" role="status">
+            {actionSuccess}
           </div>
         ) : null}
 
@@ -444,24 +564,67 @@ export default function DashboardPage() {
                   <th>Status</th>
                   <th>Departments</th>
                   <th>Created</th>
+                  {user?.role === "admin" ? <th>Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
-                {documents.map((document) => (
-                  <tr key={document.id}>
-                    <td>
-                      <div className="document-name">{document.filename}</div>
-                      <div className="document-id">Document #{document.id}</div>
-                    </td>
-                    <td>
-                      <span className={statusClass(document.status)}>
-                        {document.status}
-                      </span>
-                    </td>
-                    <td>{renderDepartments(document)}</td>
-                    <td>{formatDate(document.created_at)}</td>
-                  </tr>
-                ))}
+                {documents.map((document) => {
+                  const isBusy = busyDocumentId === document.id;
+                  const hasBusyDocument =
+                    busyDocumentId !== null && busyDocumentId !== document.id;
+
+                  return (
+                    <tr key={document.id}>
+                      <td>
+                        <div className="document-name">{document.filename}</div>
+                        <div className="document-id">
+                          Document #{document.id}
+                        </div>
+                      </td>
+                      <td>
+                        <span className={statusClass(document.status)}>
+                          {document.status}
+                        </span>
+                      </td>
+                      <td>{renderDepartments(document)}</td>
+                      <td>{formatDate(document.created_at)}</td>
+                      {user?.role === "admin" ? (
+                        <td>
+                          <div className="document-actions">
+                            <button
+                              className="button button-small button-secondary"
+                              type="button"
+                              onClick={() => void handleReindex(document)}
+                              disabled={
+                                isBusy ||
+                                hasBusyDocument ||
+                                loading ||
+                                uploading ||
+                                document.status.toLowerCase() === "deleting"
+                              }
+                            >
+                              {isBusy ? "Working…" : "Reindex"}
+                            </button>
+                            <button
+                              className="button button-small button-danger"
+                              type="button"
+                              onClick={() => void handleDelete(document)}
+                              disabled={
+                                isBusy ||
+                                hasBusyDocument ||
+                                loading ||
+                                uploading ||
+                                document.status.toLowerCase() === "deleting"
+                              }
+                            >
+                              {isBusy ? "Working…" : "Delete"}
+                            </button>
+                          </div>
+                        </td>
+                      ) : null}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

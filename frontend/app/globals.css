@@ -869,121 +869,40 @@ code {
   }
 }
 
-.upload-panel {
-  overflow: hidden;
-}
-
-.upload-form {
-  display: grid;
-  gap: 14px;
-}
-
-.upload-form .field input[type="file"] {
-  height: auto;
-  padding: 10px 12px;
-}
-
-.upload-file-note {
+.document-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px 12px;
-  color: var(--text-muted);
-  font-size: 11px;
+  gap: 0.5rem;
 }
 
-.upload-file-note strong {
-  width: 100%;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: 12px;
+.button-small {
+  min-height: 2rem;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.78rem;
 }
 
-.department-picker {
-  min-width: 0;
-  margin: 0;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
+.button-danger {
+  border: 1px solid var(--border, #d6d9df);
+  background: transparent;
+  color: var(--danger, #b42318);
 }
 
-.department-picker legend {
-  padding: 0 6px;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 800;
+.button-danger:hover:not(:disabled) {
+  border-color: var(--danger, #b42318);
 }
 
-.department-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+.button-danger:disabled,
+.button-small:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
-.department-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-muted);
-  transition:
-    border-color 0.15s ease,
-    background 0.15s ease;
-}
+@media (max-width: 900px) {
+  .document-table-wrap {
+    overflow-x: auto;
+  }
 
-.department-option-selected {
-  border-color: #93c5fd;
-  background: #eff6ff;
-}
-
-.department-option input {
-  width: 16px;
-  height: 16px;
-  margin-top: 1px;
-  flex: 0 0 auto;
-  accent-color: var(--primary);
-}
-
-.department-option span {
-  min-width: 0;
-}
-
-.department-option strong,
-.department-option small {
-  display: block;
-}
-
-.department-option strong {
-  font-size: 12px;
-}
-
-.department-option small {
-  margin-top: 3px;
-  color: var(--text-muted);
-  font-size: 10px;
-}
-
-.department-empty {
-  padding: 10px 4px 2px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.upload-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.page-alert-success {
-  border: 1px solid #bbf7d0;
-  background: #f0fdf4;
-  color: var(--success);
-}
-
-@media (max-width: 700px) {
-  .department-options {
-    grid-template-columns: 1fr;
+  .document-table {
+    min-width: 760px;
   }
 }
