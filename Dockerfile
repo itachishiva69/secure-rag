@@ -12,6 +12,10 @@ RUN apt-get update \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+RUN useradd --create-home --uid 10001 app \
+    && mkdir -p /opt/huggingface /app/storage/documents \
+    && chown -R app:app /opt/huggingface /app/storage
+
 COPY requirements.txt .
 
 RUN python -m pip install --upgrade pip \
@@ -21,10 +25,11 @@ COPY app ./app
 COPY scripts ./scripts
 COPY alembic ./alembic
 COPY alembic.ini .
-COPY .env.example .
 
-RUN mkdir -p /app/storage/documents \
-    && chmod -R 755 /app/storage
+
+RUN chmod -R 755 /app/storage
+
+USER app
 
 EXPOSE 8000
 
