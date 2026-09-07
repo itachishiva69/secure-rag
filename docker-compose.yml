@@ -104,7 +104,7 @@ services:
       retries: 10
       start_period: 5s
 
-    image: postgres:16
+    image: postgres:16.15
 
     restart: unless-stopped
 
@@ -132,7 +132,7 @@ services:
       retries: 10
       start_period: 5s
 
-    image: postgres:16
+    image: postgres:16.15
 
     ports:
       - "127.0.0.1:5433:5432"
@@ -183,7 +183,7 @@ services:
       interval: 5s
       retries: 10
 
-    image: redis:7-alpine
+    image: redis:7.4.11-alpine3.21
 
     restart: unless-stopped
 
