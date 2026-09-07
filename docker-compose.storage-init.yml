@@ -1,0 +1,31 @@
+services:
+  storage-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secure-rag-storage-init
+    command:
+      - sh
+      - -lc
+      - |
+        chown -R 10001:10001 /app/storage
+        chmod -R u+rwX,go-rX /app/storage
+    restart: "no"
+    user: root
+    volumes:
+      - app_storage:/app/storage
+
+  api:
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+
+  worker:
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+
+  scheduler:
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully

@@ -1,5 +1,6 @@
 import type {
   Department,
+  Document,
   DocumentListResponse,
   QueryResponse,
   TokenResponse,
@@ -116,15 +117,31 @@ export async function listDocuments(
 }
 
 export async function getDocumentDepartments(): Promise<Department[]> {
-  return request<Department[]>("/departments/");
+  // Keep the browser-facing path slash-free so Next.js does not issue a
+  // redirect before the dedicated proxy rule maps it to FastAPI /departments/.
+  return request<Department[]>("/departments");
+}
+
+export async function uploadDocument(
+  file: File,
+  departmentIds: number[],
+): Promise<Document> {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+  formData.append("department_ids", departmentIds.join(","));
+
+  return request<Document>("/documents/upload", {
+    method: "POST",
+    body: formData,
+  });
 }
 
 export async function submitQuery(
   query: string,
   limit = 5,
 ): Promise<QueryResponse> {
-  // Use the proxy's dedicated /query rewrite so the browser never follows
-  // FastAPI's /query -> /query/ redirect across origins.
+  // Keep the browser-facing path slash-free so the dedicated proxy rule
+  // maps it directly to the canonical FastAPI POST /query/ route.
   return request<QueryResponse>("/query", {
     method: "POST",
     headers: {

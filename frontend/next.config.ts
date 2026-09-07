@@ -1,3 +1,4 @@
+
 import type { NextConfig } from "next";
 
 const backendOrigin =
@@ -7,13 +8,17 @@ const backendOrigin =
 const nextConfig: NextConfig = {
   async rewrites() {
     return [
-      // The FastAPI query route is declared as POST /query/ and otherwise
-      // redirects /query -> /query/. When that redirect crosses from the
-      // frontend proxy to the backend origin, the browser performs a CORS
-      // preflight. Proxy directly to the canonical backend route instead.
       {
         source: "/api/backend/query",
         destination: `${backendOrigin}/query/`,
+      },
+      {
+        source: "/api/backend/departments",
+        destination: `${backendOrigin}/departments/`,
+      },
+      {
+        source: "/api/backend/departments/",
+        destination: `${backendOrigin}/departments/`,
       },
       {
         source: "/api/backend/:path*",
