@@ -52,6 +52,7 @@ export interface DocumentListResponse {
 export interface QueryRequest {
   query: string;
   limit: number;
+  conversation_id?: number;
 }
 
 export interface QuerySource {
@@ -64,6 +65,32 @@ export interface QueryResponse {
   query: string;
   answer: string;
   sources: QuerySource[];
+  conversation_id: number | null;
+}
+
+export interface Conversation {
+  id: number;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+export interface ConversationDetail extends Conversation {
+  messages: ConversationMessage[];
+}
+
+export interface ConversationListResponse {
+  items: Conversation[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface ApiErrorBody {

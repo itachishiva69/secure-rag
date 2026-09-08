@@ -20,6 +20,10 @@ const nextConfig: NextConfig = {
         destination: `${backendOrigin}/users/`,
       },
       {
+        source: "/api/backend/conversations",
+        destination: `${backendOrigin}/conversations/`,
+      },
+      {
         source: "/api/backend/:path*",
         destination: `${backendOrigin}/:path*`,
       },
