@@ -226,6 +226,13 @@ export async function updateUser(
   });
 }
 
+
+export async function deleteUser(userId: number): Promise<void> {
+  return request<void>(`/users/${userId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function submitQuery(
   query: string,
   limit = 5,

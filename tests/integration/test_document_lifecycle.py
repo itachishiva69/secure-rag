@@ -490,6 +490,68 @@ def test_admin_can_schedule_reindex(
         app.dependency_overrides.clear()
 
 
+def test_non_admin_cannot_reindex_document(
+    db_session,
+):
+    department = create_department(
+        db_session,
+        "Reindex-Authorization-Department",
+    )
+
+    user = create_user(
+        db_session,
+        department.id,
+    )
+
+    document = create_document(
+        db_session,
+        uploaded_by=user.id,
+        department_ids=[
+            department.id
+        ],
+        status=DocumentStatus.INDEXED,
+    )
+
+    db_session.commit()
+
+    configure_app(
+        db_session,
+        user,
+    )
+
+    client = TestClient(
+        app
+    )
+
+    try:
+        response = client.post(
+            f"/documents/{document.id}/reindex"
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == (
+            "Admin privileges required"
+        )
+
+        db_session.expire_all()
+
+        refreshed_document = (
+            db_session.get(
+                Document,
+                document.id,
+            )
+        )
+
+        assert refreshed_document is not None
+
+        assert refreshed_document.status == (
+            DocumentStatus.INDEXED
+        )
+
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_reindex_rejects_document_already_processing(
     db_session,
 ):

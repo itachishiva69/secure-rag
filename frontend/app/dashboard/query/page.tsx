@@ -87,7 +87,7 @@ export default function QueryPage() {
   }
 
   return (
-    <div className="content-stack query-workspace">
+    <div className="content-stack query-workspace query-page-shell">
       <section className="hero-panel query-hero">
         <div>
           <div className="eyebrow">AUTHORIZATION-FIRST RETRIEVAL</div>
@@ -108,7 +108,7 @@ export default function QueryPage() {
         </div>
       </section>
 
-      <section className="panel query-panel">
+      <section className="panel query-panel query-composer-card">
         <div className="panel-header">
           <div>
             <div className="eyebrow">QUESTION</div>
@@ -131,9 +131,11 @@ export default function QueryPage() {
           <label className="sr-only" htmlFor="rag-query">
             Ask a question
           </label>
+          <div className="query-input-wrap">
           <textarea
             id="rag-query"
             className="query-input"
+
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleKeyDown}
@@ -143,8 +145,9 @@ export default function QueryPage() {
             disabled={loading}
             autoFocus
           />
+          </div>
 
-          <div className="query-form-footer">
+          <div className="query-form-footer query-composer-footer">
             <span className="query-help">
               Ctrl+Enter or ⌘+Enter to submit · {query.length}/4000
             </span>
@@ -187,7 +190,7 @@ export default function QueryPage() {
       ) : null}
 
       {result ? (
-        <section className="query-results" aria-live="polite">
+        <section className="query-results query-results-layout" aria-live="polite">
           <article className="panel answer-panel">
             <div className="panel-header">
               <div>
@@ -202,7 +205,7 @@ export default function QueryPage() {
               <span>{result.query}</span>
             </div>
 
-            <div className="answer-text">{result.answer}</div>
+            <div className="answer-text answer-content">{result.answer}</div>
           </article>
 
           <aside className="panel sources-panel">
@@ -224,7 +227,7 @@ export default function QueryPage() {
                 </p>
               </div>
             ) : (
-              <div className="source-list">
+              <div className="source-list source-list-enhanced">
                 {result.sources.map((source, index) => (
                   <div
                     className="source-card"
@@ -242,7 +245,7 @@ export default function QueryPage() {
               </div>
             )}
 
-            <div className="source-security-note">
+            <div className="source-security-note source-trust-note">
               Sources are returned by the authorization-first backend. The
               frontend does not decide which documents are eligible.
             </div>

@@ -20,9 +20,12 @@ class AuditLog(Base):
         primary_key=True
     )
 
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"),
-        nullable=False,
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
         index=True,
     )
 

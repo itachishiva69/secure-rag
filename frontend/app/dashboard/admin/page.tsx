@@ -13,6 +13,7 @@ import {
   createDepartment,
   createUser,
   deleteDepartment,
+  deleteUser,
   getCurrentUser,
   getDocumentDepartments,
   listUsers,
@@ -23,6 +24,7 @@ import { getAccessToken } from "../../../lib/auth";
 import type {
   Department,
   User,
+  UserListResponse,
   UserResponse,
 } from "../../../lib/types";
 
@@ -376,6 +378,45 @@ export default function AdminPage() {
     }
   }
 
+
+  async function handleDeleteUser(account: UserResponse) {
+    resetMessages();
+
+    if (account.id === user?.id) {
+      setActionError("You cannot delete your own administrator account.");
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Delete user "${account.email}"?\n\nThis removes the account permanently. The backend will reject the deletion if the account owns documents or if it would remove the last administrator.`,
+      )
+    ) {
+      return;
+    }
+
+    setUserActionId(account.id);
+
+    try {
+      await deleteUser(account.id);
+
+      if (editingUserId === account.id) {
+        cancelUserEdit();
+      }
+
+      setActionSuccess(`User ${account.email} deleted.`);
+      await loadAdminData();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      setActionError(actionErrorMessage(error));
+    } finally {
+      setUserActionId(null);
+    }
+  }
+
   return (
     <div className="content-stack">
       <section className="hero-panel">
@@ -643,6 +684,11 @@ export default function AdminPage() {
           </span>
         </div>
 
+        <p className="admin-panel-note">
+          Deleting a user removes the account but preserves its audit history.
+          Accounts that own documents must be cleaned up before deletion.
+        </p>
+
         {loading ? (
           <div className="empty-state">
             <div className="spinner" aria-hidden="true" />
@@ -657,6 +703,7 @@ export default function AdminPage() {
           <div className="admin-user-list">
             {users.map((account) => {
               const editing = editingUserId === account.id;
+              const editingSelf = account.id === user?.id;
               const busy = userActionId === account.id;
 
               return (
@@ -678,15 +725,27 @@ export default function AdminPage() {
 
                         <label className="field">
                           <span>Role</span>
-                          <input
-                            type="text"
+                          <select
                             value={editingUserRole}
                             onChange={(event) =>
-                              setEditingUserRole(event.target.value)
+                              setEditingUserRole(
+                                event.target.value as "user" | "admin",
+                              )
                             }
-                            maxLength={20}
-                            disabled={busy}
-                          />
+                            disabled={busy || editingSelf}
+                            aria-describedby={
+                              editingSelf ? "self-role-help" : undefined
+                            }
+                          >
+                            <option value="user">user</option>
+                            <option value="admin">admin</option>
+                          </select>
+                          {editingSelf ? (
+                            <span id="self-role-help" className="form-note">
+                              Your administrator role cannot be changed here.
+                              Another administrator must change your role.
+                            </span>
+                          ) : null}
                         </label>
                       </div>
 
@@ -765,6 +824,24 @@ export default function AdminPage() {
                           }
                         >
                           Edit
+                        </button>
+                        <button
+                          className="button button-small button-danger"
+                          type="button"
+                          onClick={() => void handleDeleteUser(account)}
+                          disabled={
+                            busy ||
+                            userActionId !== null ||
+                            departmentActionId !== null ||
+                            account.id === user?.id
+                          }
+                          title={
+                            account.id === user?.id
+                              ? "Your administrator account cannot be deleted here."
+                              : "Delete this user"
+                          }
+                        >
+                          {busy ? "Working…" : "Delete"}
                         </button>
                       </div>
                     </>

@@ -2,27 +2,45 @@
 
 A production-style, department-aware Retrieval-Augmented Generation (RAG) application built with FastAPI, PostgreSQL, Qdrant, Redis, RQ, local document storage, JWT authentication, Argon2 password hashing, and a Groq OpenAI-compatible LLM.
 
-The project is intentionally developed beyond a minimal RAG demo. Authorization, document lifecycle consistency, background processing, failure handling, API hardening, observability, testing, and operational procedures are treated as first-class concerns.
+The project is intentionally developed beyond a minimal RAG demo. Authorization, document lifecycle consistency, background processing, failure handling, API hardening, observability, testing, operational procedures, and the administrative frontend are treated as first-class concerns.
 
 ---
 
 ## Project Status
 
 The production-style backend, operational foundation, observability stack,
-backup/restore workflow, and security/reliability validation are implemented.
-The final production review is the current checkpoint before frontend work.
+backup/restore workflow, security/reliability validation, and the initial
+frontend/admin workflow are implemented.
+
+The final production review is the current checkpoint before the next frontend
+refinement/review work.
 
 ```text
 1. Core Application                    ✅ Complete
-2. Authorization / Data Isolation      ✅ Complete
-3. Document Lifecycle & Consistency    ✅ Complete
-4. RAG Failure Handling                ✅ Complete
-5. API & Application Hardening         ✅ Complete
-6. Observability & Operations          ✅ Complete
-7. Security & Reliability Testing      ✅ Complete
-8. Production Deployment               ✅ Complete
-9. Frontend                            ⬜ Not Started
-10. Final Production Review             🚧 In Progress
+
+2. Authorization / Data Isolation     ✅ Complete
+
+3. Document Lifecycle & Consistency   ✅ Complete
+
+4. RAG Failure Handling               ✅ Complete
+
+5. API & Application Hardening       ✅ Complete
+
+6. Observability & Operations         ✅ Complete
+
+7. Security & Reliability Testing     ✅ Complete
+
+8. Production Deployment              ✅ Complete
+
+9. Frontend                           🚧 In Progress
+
+10. Final Production Review           🚧 In Progress
+```
+
+The current backend test suite passes with:
+
+```text
+300 tests passed
 ```
 
 ---
@@ -48,6 +66,7 @@ The final production review is the current checkpoint before frontend work.
 | Document Storage | Local shared Docker volume |
 | Containers | Docker Compose |
 | Testing | pytest |
+| Frontend | Next.js, React, TypeScript, Tailwind CSS |
 
 LangChain is intentionally limited to the text-splitting dependency used by the application.
 
@@ -108,7 +127,7 @@ LangChain is intentionally limited to the text-splitting dependency used by the 
 
 The API, worker, and scheduler communicate with infrastructure over the Docker Compose network.
 
-Only the API is host-published in the hardened Compose configuration.
+Only the API is host-published in the hardened Compose configuration. Observability services are host-published on localhost for local operational access.
 
 ---
 
@@ -150,19 +169,58 @@ Return answer
 
 ```text
 Admin user
+
     ↓
-Unrestricted access
+
+Unrestricted department access
 
 Regular user with department
+
     ↓
+
 Only that department's documents
 
 Regular user without department
+
     ↓
+
 No department-scoped documents
 ```
 
 Authorization is applied before vector retrieval rather than being deferred until after an LLM response is generated.
+
+### Administrative permissions
+
+Administrative document and user-management operations are intentionally separated from normal user query access.
+
+```text
+Regular USER
+
+    ├── Query documents within assigned department
+    ├── No document upload
+    ├── No document deletion
+    ├── No document reindex
+    ├── No document department changes
+    └── No user/department management
+
+ADMIN
+
+    ├── Query across departments
+    ├── Upload documents
+    ├── Select document departments
+    ├── Delete documents
+    ├── Schedule document reindex
+    ├── Manage users
+    └── Manage departments
+```
+
+Administrative protections include:
+
+- Administrators cannot delete their own account.
+- The last administrator cannot be deleted.
+- A user who owns documents cannot be deleted until those documents are deleted or reassigned.
+- Audit history is preserved when users or departments are deleted by allowing the corresponding audit references to become `NULL`.
+- Non-administrators cannot perform administrative document lifecycle actions such as upload, deletion, reindexing, or department reassignment.
 
 ---
 
@@ -172,9 +230,13 @@ Documents can be associated with multiple departments.
 
 ```text
 Document
+
    │
+
    ├── Engineering
+
    ├── Finance
+
    └── HR
 ```
 
@@ -184,9 +246,13 @@ Document lifecycle states include:
 
 ```text
 UPLOADED
+
     ↓
+
 PROCESSING
+
     ↓
+
 INDEXED
 ```
 
@@ -194,6 +260,7 @@ Failure and deletion states are handled explicitly:
 
 ```text
 PROCESSING → FAILED
+
 INDEXED    → DELETING → deleted
 ```
 
@@ -209,15 +276,25 @@ The document lifecycle is designed so that PostgreSQL remains the durable source
 
 ```text
 Validate upload
+
     ↓
+
 Write file to storage
+
     ↓
+
 Create DB document
+
     ↓
+
 Create ingestion outbox event
+
     ↓
+
 Record audit information
+
     ↓
+
 Commit transaction
 ```
 
@@ -227,20 +304,67 @@ Redis/RQ availability is not required for the upload transaction to remain durab
 
 ```text
 DELETE request
+
     ↓
+
 Mark document DELETING
+
     ↓
+
 Create deletion outbox event
+
     ↓
+
 Commit transaction
+
     ↓
+
 Outbox dispatcher
+
     ↓
+
 RQ deletion job
+
     ├── Delete Qdrant vectors
+
     ├── Delete stored file
+
     └── Delete DB document
 ```
+
+### Reindex
+
+Administrative reindexing is performed through the same durable workflow model.
+
+```text
+Reindex request
+
+    ↓
+
+Validate administrative authorization
+
+    ↓
+
+Transition document to UPLOADED
+
+    ↓
+
+Create ingestion outbox event
+
+    ↓
+
+Commit transaction
+
+    ↓
+
+Outbox dispatcher
+
+    ↓
+
+RQ ingestion job
+```
+
+A document that is already processing is rejected rather than creating overlapping ingestion work.
 
 ### Reconciliation
 
@@ -258,29 +382,53 @@ The RAG path is designed around authorization-first retrieval.
 
 ```text
 User query
+
     ↓
+
 Authenticate user
+
     ↓
+
 Determine authorized departments
+
     ↓
+
 Generate query embedding
+
     ↓
+
 Qdrant semantic search with department filter
+
     ↓
+
 Validate retrieved chunks
+
     ↓
+
 Validate document existence
+
     ↓
+
 Validate current department assignments
+
     ↓
+
 Validate lifecycle state
+
     ↓
+
 Rerank candidates
+
     ↓
+
 Build bounded context
+
     ↓
+
 Call Groq LLM
+
     ↓
+
 Return grounded response
 ```
 
@@ -294,7 +442,7 @@ The API includes multiple operational and security controls.
 
 ### Network perimeter
 
-Production Compose exposes only:
+Production Compose exposes the API on localhost:
 
 ```text
 127.0.0.1:8001 → API container:8000
@@ -304,9 +452,13 @@ PostgreSQL, Qdrant, and Redis are internal-only:
 
 ```text
 postgres:5432
+
 qdrant:6333
+
 redis:6379
 ```
+
+Prometheus and Grafana are exposed only on localhost for operational access.
 
 ### Request security
 
@@ -384,7 +536,9 @@ Typical request events include:
 
 ```text
 http_request_started
+
 http_request_completed
+
 http_request_failed
 ```
 
@@ -392,8 +546,11 @@ Background processes emit structured events for:
 
 ```text
 worker_started
+
 worker_failed
+
 scheduler_started
+
 scheduler_failed
 ```
 
@@ -407,6 +564,7 @@ The API exposes operational metrics including:
 
 ```text
 secure_rag_http_requests_total
+
 secure_rag_http_request_duration_seconds
 
 secure_rag_documents_total
@@ -414,7 +572,9 @@ secure_rag_documents_total
 secure_rag_stale_documents_total
 
 secure_rag_outbox_events_total
+
 secure_rag_outbox_events_ready
+
 secure_rag_outbox_pending_oldest_age_seconds
 
 secure_rag_rq_queue_depth
@@ -422,12 +582,9 @@ secure_rag_rq_queue_depth
 secure_rag_metrics_collections_total
 ```
 
-These metrics support the deployed Prometheus/Grafana observability
-stack and provide operational monitoring and alert-oriented visibility.
+These metrics support the deployed Prometheus/Grafana observability stack and provide operational monitoring and alert-oriented visibility.
 
-Prometheus and Grafana are deployed as part of the production observability
-stack. Prometheus scrapes the API metrics endpoint, and the observability
-services are host-published only on localhost.
+Prometheus and Grafana are deployed as part of the production observability stack. Prometheus scrapes the API metrics endpoint, and the observability services are host-published only on localhost.
 
 ---
 
@@ -457,16 +614,65 @@ It covers:
 
 ---
 
+## Frontend
+
+The project now includes the initial administrative and query frontend.
+
+The frontend is built with:
+
+```text
+Next.js
+React
+TypeScript
+Tailwind CSS
+```
+
+Current dashboard functionality includes:
+
+```text
+Dashboard
+   │
+   ├── Query
+   │     └── Department-aware RAG queries
+   │
+   └── Admin
+         ├── User management
+         ├── Role management
+         ├── User deletion
+         ├── Department management
+         └── Administrative document workflows
+```
+
+Frontend routing uses the Next.js application structure under:
+
+```text
+frontend/app/
+```
+
+The frontend API client is implemented under:
+
+```text
+frontend/lib/api.ts
+```
+
+The Next.js development server may use a different host port when another local service is already using port 3000.
+
+Frontend work remains part of the final production review and refinement stage.
+
+---
+
 ## Project Structure
 
 ```text
 secure-rag/
+
 ├── app/
 │   ├── api/
 │   │   ├── auth.py
 │   │   ├── departments.py
 │   │   ├── documents.py
-│   │   └── query.py
+│   │   ├── query.py
+│   │   └── users.py
 │   │
 │   ├── core/
 │   │   ├── config.py
@@ -479,6 +685,7 @@ secure-rag/
 │   │   └── database.py
 │   │
 │   ├── models/
+│   │   ├── audit_log.py
 │   │   ├── department.py
 │   │   ├── document.py
 │   │   ├── document_department.py
@@ -499,6 +706,7 @@ secure-rag/
 │   │   └── user.py
 │   │
 │   └── services/
+│       ├── admin_service.py
 │       ├── authorization.py
 │       ├── document_service.py
 │       ├── file_storage.py
@@ -512,18 +720,33 @@ secure-rag/
 │       └── ...
 │
 ├── alembic/
+│   └── versions/
+│
 ├── docs/
 │   └── operations.md
+│
+├── frontend/
+│   ├── app/
+│   │   ├── dashboard/
+│   │   │   ├── admin/
+│   │   │   └── query/
+│   │   └── ...
+│   └── lib/
+│       └── api.ts
+│
 ├── scripts/
 │   ├── cron.py
 │   ├── worker.py
 │   └── ...
+│
 ├── storage/
 │   └── documents/
+│
 ├── tests/
 │   ├── unit/
 │   ├── integration/
 │   └── security/
+│
 ├── .env.example
 ├── .gitignore
 ├── docker-compose.yml
@@ -545,11 +768,13 @@ secure-rag/
 - Python 3.12+
 - Docker
 - Docker Compose
+- Node.js 22+ for frontend development
 
 ### Create a virtual environment
 
 ```bash
 python3.12 -m venv .venv
+
 source .venv/bin/activate
 ```
 
@@ -577,7 +802,7 @@ Example JWT secret generation:
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-### Start the stack
+### Start the backend stack
 
 ```bash
 docker compose up -d
@@ -589,19 +814,23 @@ docker compose up -d
 docker compose ps
 ```
 
-The hardened Compose setup publishes only the API:
+The hardened Compose setup publishes the API on localhost:
 
 ```text
 127.0.0.1:8001 → API container:8000
 ```
 
-The remaining services stay inside the Docker Compose network:
+The remaining backend services stay inside the Docker Compose network:
 
 ```text
 PostgreSQL → postgres:5432
+
 Qdrant     → qdrant:6333
+
 Redis      → redis:6379
 ```
+
+Prometheus and Grafana are separately available on localhost for operations/observability.
 
 ### Run migrations
 
@@ -613,12 +842,29 @@ alembic upgrade head
 
 ```bash
 curl http://127.0.0.1:8001/health
+
 curl http://127.0.0.1:8001/ready
+
 curl http://127.0.0.1:8001/health/qdrant
+
 curl http://127.0.0.1:8001/metrics
 ```
 
 In production configuration, interactive API documentation is disabled.
+
+### Start the frontend
+
+From the frontend directory:
+
+```bash
+cd frontend
+
+npm install
+
+npm run dev
+```
+
+The frontend is configured to communicate with the backend through the Next.js application routing/rewrites.
 
 ---
 
@@ -644,10 +890,13 @@ The test suite covers areas including:
 - authentication
 - authorization
 - department isolation
+- admin user management
+- audit-log preservation
 - document lifecycle
 - storage validation
 - ingestion behavior
 - deletion consistency
+- reindex authorization
 - reconciliation
 - outbox dispatch
 - rate limiting
@@ -657,6 +906,14 @@ The test suite covers areas including:
 - metrics
 - operational process logging
 - retrieval authorization
+
+Current full-suite checkpoint:
+
+```text
+300 tests passed
+```
+
+A remaining test warning is from the Starlette/AnyIO deprecation path and does not indicate a failing test.
 
 ---
 
@@ -668,32 +925,47 @@ Important configuration areas include:
 
 ```text
 APP_ENV
+
 DEBUG
+
 DATABASE_URL
+
 QDRANT_URL
+
 QDRANT_COLLECTION
+
 REDIS_URL
+
 STORAGE_PATH
 
 JWT_ALGORITHM
+
 JWT_SECRET
+
 ACCESS_TOKEN_EXPIRE_MINUTES
 
 LLM_BASE_URL
+
 LLM_API_KEY
+
 LLM_MODEL
+
 LLM_TIMEOUT_SECONDS
 
 MAX_UPLOAD_SIZE_MB
 
 UPLOAD_RATE_LIMIT_REQUESTS
+
 UPLOAD_RATE_LIMIT_WINDOW_SECONDS
 
 QUERY_RATE_LIMIT_REQUESTS
+
 QUERY_RATE_LIMIT_WINDOW_SECONDS
 
 RECONCILIATION_INTERVAL_SECONDS
+
 RECONCILIATION_STALE_PROCESSING_MINUTES
+
 RECONCILIATION_STALE_DELETING_MINUTES
 ```
 
@@ -709,6 +981,7 @@ Queues include:
 
 ```text
 document-ingestion
+
 document-maintenance
 ```
 
@@ -716,8 +989,11 @@ The worker executes jobs such as:
 
 ```text
 ingest_document_job
+
 delete_document_job
+
 reconcile_stale_documents_job
+
 dispatch_pending_outbox_job
 ```
 
@@ -735,17 +1011,29 @@ The sequence is:
 
 ```text
 Database transaction
+
       ↓
+
 Persist document state change
+
       ↓
+
 Persist outbox event
+
       ↓
+
 Commit
+
       ↓
+
 Outbox dispatcher claims pending events
+
       ↓
+
 Enqueue deterministic RQ job
+
       ↓
+
 Mark event dispatched
 ```
 
@@ -761,29 +1049,45 @@ Examples include:
 
 ```text
 Upload succeeds, Redis unavailable
+
     ↓
+
 Outbox remains durable
+
     ↓
+
 Dispatcher retries later
 ```
 
 ```text
 Ingestion partially indexes vectors
+
     ↓
+
 Failure detected
+
     ↓
+
 Partial vector state is cleaned up
 ```
 
 ```text
 Deletion starts
+
     ↓
+
 Worker interrupted
+
     ↓
+
 Document remains DELETING
+
     ↓
+
 Reconciliation detects stale state
+
     ↓
+
 Cleanup work is resumed
 ```
 
@@ -831,6 +1135,8 @@ The project follows these core principles:
 8. Secrets are supplied through environment configuration and are never committed.
 9. Operational metrics and logs are designed to avoid sensitive request payloads.
 10. Security behavior is validated by automated tests rather than relying only on configuration.
+11. Administrative operations are enforced by backend authorization rather than frontend visibility alone.
+12. Destructive account-management operations preserve auditability where possible.
 
 ---
 
@@ -840,17 +1146,29 @@ Development follows a checkpoint-based workflow:
 
 ```text
 Implement checkpoint
+
       ↓
+
 Run targeted tests
+
       ↓
+
 Run broader/full tests
+
       ↓
+
 Verify runtime behavior
+
       ↓
+
 Review git diff
+
       ↓
+
 Focused commit
+
       ↓
+
 Next checkpoint
 ```
 
@@ -862,22 +1180,29 @@ This keeps each hardening step isolated and reviewable.
 
 ```text
 1. Core Application
+
        ✅ Complete
 
 2. Authorization / Data Isolation
+
        ✅ Complete
 
 3. Document Lifecycle & Consistency
+
        ✅ Complete
 
 4. RAG Failure Handling
+
        ✅ Complete
 
 5. API & Application Hardening
+
        ✅ Complete
 
 6. Observability & Operations
+
        ✅ Complete
+
        ├── 6.1 Observability baseline
        ├── 6.2 Operational metrics
        ├── 6.3 Metrics hardening
@@ -885,7 +1210,9 @@ This keeps each hardening step isolated and reviewable.
        └── 6.5 Operational runbook
 
 7. Security & Reliability Testing
+
        ✅ Complete
+
        ├── 7.1 Full test suite
        ├── 7.2 Production configuration validation
        ├── 7.3 PostgreSQL restore drill
@@ -894,15 +1221,38 @@ This keeps each hardening step isolated and reviewable.
        └── 7.6 Remote backup restore drill
 
 8. Production Deployment
+
        ✅ Complete
+
        ├── 8.1 Production Docker deployment
        ├── 8.2 Prometheus / Grafana observability
        └── 8.3 Remote backup archival and retention
 
 9. Frontend
+
+       ✅ Complete
+
+       ├── 9.1 Next.js application foundation
+       ├── 9.2 Query dashboard
+       ├── 9.3 Admin dashboard
+       ├── 9.4 User role management
+       ├── 9.5 User deletion safeguards
+       └── 9.6 UI refinement / production review
+
+10. Conversational RAG
+
        ⬜ Not Started
 
-10. Final Production Review
+       ├── 10.1 Conversation model & persistence
+       ├── 10.2 Streaming responses
+       ├── 10.3 Follow-up questions
+       ├── 10.4 Query rewriting
+       ├── 10.5 Conversational retrieval
+       ├── 10.6 Conversation memory
+       └── 10.7 Secure multi-turn authorization
+
+11. Final Production Review
+
        🚧 In Progress
 ```
 

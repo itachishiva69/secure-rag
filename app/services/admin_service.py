@@ -351,6 +351,69 @@ def update_user(
     return user
 
 
+
+def delete_user(
+    db: Session,
+    *,
+    user_id: int,
+    current_user_id: int,
+) -> None:
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .with_for_update()
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    if user.id == current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You cannot delete your own administrator account",
+        )
+
+    if user.role == UserRole.ADMIN:
+        remaining_admins = (
+            db.query(func.count(User.id))
+            .filter(
+                User.role == UserRole.ADMIN,
+                User.id != user_id,
+            )
+            .scalar()
+            or 0
+        )
+
+        if remaining_admins == 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The last administrator cannot be deleted",
+            )
+
+    document_count = (
+        db.query(func.count(Document.id))
+        .filter(Document.uploaded_by == user_id)
+        .scalar()
+        or 0
+    )
+
+    if document_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "User cannot be deleted while documents are owned by "
+                "this account. Delete or reassign those documents first."
+            ),
+        )
+
+    db.delete(user)
+    db.flush()
+
+
 def list_users(
     db: Session,
     *,

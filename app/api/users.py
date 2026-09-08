@@ -20,6 +20,7 @@ from app.schemas.user import (
 )
 from app.services.admin_service import (
     create_user,
+    delete_user,
     list_users,
     update_user,
 )
@@ -215,3 +216,46 @@ def update_user_endpoint(
         ) from exc
 
     return user
+
+
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_user_endpoint(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    try:
+        delete_user(
+            db=db,
+            user_id=user_id,
+            current_user_id=current_user.id,
+        )
+
+        record_audit_event(
+            db,
+            user=current_user,
+            action="user_delete",
+            resource_type="user",
+            resource_id=user_id,
+            department_id=None,
+            success=True,
+        )
+
+        db.commit()
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete user",
+        ) from exc
+
+    return None
