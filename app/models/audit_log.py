@@ -44,7 +44,10 @@ class AuditLog(Base):
     )
 
     department_id: Mapped[int | None] = mapped_column(
-        ForeignKey("departments.id"),
+        ForeignKey(
+            "departments.id",
+            ondelete="SET NULL",
+        ),
         nullable=True,
         index=True,
     )
