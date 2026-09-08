@@ -21,6 +21,10 @@ from fastapi.responses import (
 from qdrant_client import QdrantClient
 from sqlalchemy import text
 
+from app.api.conversations import (
+    router as conversations_router,
+)
+
 from app.api.auth import router as auth_router
 from app.api.departments import (
     router as departments_router,
@@ -330,8 +334,14 @@ app.add_middleware(
 )
 
 
+
+
 app.include_router(
     auth_router
+)
+
+app.include_router(
+    conversations_router
 )
 
 app.include_router(

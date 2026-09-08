@@ -11,6 +11,10 @@ class RetrievalRequest(BaseModel):
         ge=1,
         le=20,
     )
+    conversation_id: int | None = Field(
+        default=None,
+        gt=0,
+    )
 
     model_config = ConfigDict(
         extra="forbid",
@@ -50,6 +54,7 @@ class QueryResponse(BaseModel):
     query: str
     answer: str
     sources: list[QuerySource]
+    conversation_id: int | None
 
 
 class RetrievalResponse(BaseModel):
