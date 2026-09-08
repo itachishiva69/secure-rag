@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from time import perf_counter
 from uuid import uuid4
 
@@ -43,6 +44,7 @@ from app.core.request_context import (
     set_request_id,
 )
 from app.db.database import engine
+from app.services.model_warmup import warm_models
 from app.services.queue import get_redis
 
 
@@ -243,6 +245,37 @@ documentation_urls = (
 )
 
 
+@asynccontextmanager
+async def lifespan(
+    app: FastAPI,
+):
+    logger.info(
+        "application_startup_begin"
+    )
+
+    started_at = perf_counter()
+
+    warm_models()
+
+    duration_ms = round(
+        (perf_counter() - started_at) * 1000,
+        2,
+    )
+
+    logger.info(
+        "application_startup_models_warmed",
+        extra={
+            "duration_ms": duration_ms,
+        },
+    )
+
+    yield
+
+    logger.info(
+        "application_shutdown"
+    )
+
+
 app = FastAPI(
     title=settings.app_name,
     docs_url=documentation_urls[
@@ -254,6 +287,7 @@ app = FastAPI(
     openapi_url=documentation_urls[
         "openapi_url"
     ],
+    lifespan=lifespan,
 )
 
 
