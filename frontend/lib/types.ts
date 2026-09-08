@@ -7,6 +7,21 @@ export interface User {
   department_id: number | null;
 }
 
+export interface UserResponse {
+  id: number;
+  email: string;
+  role: string;
+  department_id: number | null;
+  created_at: string;
+}
+
+export interface UserListResponse {
+  items: UserResponse[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface TokenResponse {
   access_token: string;
 }

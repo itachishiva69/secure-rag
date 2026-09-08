@@ -5,6 +5,8 @@ import type {
   QueryResponse,
   TokenResponse,
   User,
+  UserListResponse,
+  UserResponse,
 } from "./types";
 import { clearAccessToken, getAccessToken } from "./auth";
 
@@ -117,7 +119,36 @@ export async function listDocuments(
 }
 
 export async function getDocumentDepartments(): Promise<Department[]> {
-  return request<Department[]>("/departments/");
+  return request<Department[]>("/departments");
+}
+
+export async function createDepartment(name: string): Promise<Department> {
+  return request<Department>("/departments/", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function updateDepartment(
+  departmentId: number,
+  name: string,
+): Promise<Department> {
+  return request<Department>(`/departments/${departmentId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteDepartment(departmentId: number): Promise<void> {
+  return request<void>(`/departments/${departmentId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function uploadDocument(
@@ -143,6 +174,55 @@ export async function reindexDocument(documentId: number): Promise<Document> {
 export async function deleteDocument(documentId: number): Promise<void> {
   return request<void>(`/documents/${documentId}`, {
     method: "DELETE",
+  });
+}
+
+export async function listUsers(
+  limit = 20,
+  offset = 0,
+): Promise<UserListResponse> {
+  const searchParams = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+
+  return request<UserListResponse>(`/users?${searchParams}`);
+}
+
+export async function createUser(
+  email: string,
+  password: string,
+  role: string,
+  departmentId: number | null,
+): Promise<UserResponse> {
+  return request<UserResponse>("/users/", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      email,
+      password,
+      role,
+      department_id: departmentId,
+    }),
+  });
+}
+
+export async function updateUser(
+  userId: number,
+  payload: {
+    email?: string | null;
+    role?: string | null;
+    department_id?: number | null;
+  },
+): Promise<UserResponse> {
+  return request<UserResponse>(`/users/${userId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
   });
 }
 

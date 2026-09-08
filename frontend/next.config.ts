@@ -1,4 +1,3 @@
-
 import type { NextConfig } from "next";
 
 const backendOrigin =
@@ -17,8 +16,8 @@ const nextConfig: NextConfig = {
         destination: `${backendOrigin}/departments/`,
       },
       {
-        source: "/api/backend/departments/",
-        destination: `${backendOrigin}/departments/`,
+        source: "/api/backend/users",
+        destination: `${backendOrigin}/users/`,
       },
       {
         source: "/api/backend/:path*",
