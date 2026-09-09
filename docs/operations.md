@@ -947,6 +947,299 @@ complete.
 
 ---
 
+
+# Production systemd Backup Automation
+
+Production backup automation is executed by the host-level systemd timer rather than by
+Docker Compose.
+
+The scheduled backup flow is:
+
+```text
+systemd timer
+    ↓
+secure-rag-backup.service
+    ↓
+/usr/local/libexec/secure-rag-backup
+    ↓
+local backup creation
+    ↓
+checksum verification as secure-rag-backup
+    ↓
+/usr/local/libexec/secure-rag-archive-backup
+    ↓
+S3 upload + remote object verification
+    ↓
+/usr/local/libexec/secure-rag-cleanup-remote-backups
+    ↓
+remote retention
+```
+
+The runtime wrapper is installed at:
+
+```text
+/usr/local/libexec/secure-rag-backup
+```
+
+The wrapper intentionally runs the local backup creation from the repository as `root`,
+because it must access the Docker application storage and other protected host resources.
+Remote archival and retention are executed as the dedicated unprivileged service account:
+
+```text
+secure-rag-backup
+```
+
+The host-installed archival and retention helpers are:
+
+```text
+/usr/local/libexec/secure-rag-archive-backup
+/usr/local/libexec/secure-rag-cleanup-remote-backups
+```
+
+These installed copies are required for the systemd service because the service account must
+not depend on traversing the private user home directory.
+
+Do not loosen `/home/shiva` permissions to make the backup service work. Keep the user's
+home directory private.
+
+## systemd Service Configuration
+
+The main service definition contains:
+
+```ini
+[Service]
+TimeoutStartSec=2h
+```
+
+A systemd drop-in overrides this with the timeout required by the backup wrapper's retry
+policy:
+
+```text
+/etc/systemd/system/secure-rag-backup.service.d/override.conf
+```
+
+Contents:
+
+```ini
+[Service]
+TimeoutStartSec=10h
+```
+
+The effective configuration can be verified with:
+
+```bash
+systemctl show secure-rag-backup.service -p TimeoutStartUSec
+```
+
+Expected:
+
+```text
+TimeoutStartUSec=10h
+```
+
+The 10-hour timeout provides enough headroom for the wrapper's approximately 9-hour-22-minute
+retry window for S3 archival and remote retention.
+
+Reload systemd after changing the drop-in:
+
+```bash
+sudo systemctl daemon-reload
+```
+
+## Backup Timer
+
+The scheduled timer is:
+
+```text
+secure-rag-backup.timer
+```
+
+Verify it with:
+
+```bash
+sudo systemctl status secure-rag-backup.timer --no-pager
+sudo systemctl list-timers --all | grep secure-rag-backup
+```
+
+The production schedule is daily at approximately 02:30 local time, with persistence and a
+small randomized delay.
+
+The service itself is intentionally `disabled`; the timer is the component that is enabled:
+
+```bash
+sudo systemctl is-enabled secure-rag-backup.timer
+```
+
+Expected:
+
+```text
+enabled
+```
+
+Run a complete backup manually through systemd when validating the production pipeline:
+
+```bash
+sudo systemctl start secure-rag-backup.service
+```
+
+Check the result:
+
+```bash
+sudo systemctl status secure-rag-backup.service --no-pager
+sudo journalctl -u secure-rag-backup.service -n 100 --no-pager
+```
+
+A successful run should show:
+
+```text
+Backup pipeline completed successfully.
+```
+
+## Production Local Backup Verification
+
+The production backup manifest is named:
+
+```text
+sha256sums.txt
+```
+
+When verifying a production backup from the protected backup directory, use root:
+
+```bash
+sudo bash -c '
+cd /var/lib/secure-rag-backup/backups/<TIMESTAMP> &&
+sha256sum -c sha256sums.txt
+'
+```
+
+Every manifest entry must report:
+
+```text
+OK
+```
+
+Do not use `sha256sums` without the `.txt` suffix.
+
+## S3 Archival and Retention
+
+The production remote backup prefix is:
+
+```text
+s3://secure-rag-backups-557358104639/secure-rag/production
+```
+
+The dedicated automation profile is:
+
+```text
+secure-rag-backup-auto
+```
+
+The systemd wrapper supplies the required environment to the archive and retention helpers.
+Therefore, testing the archive helper by executing it directly without its environment may
+produce the expected error:
+
+```text
+ERROR: BACKUP_REMOTE_URI is not set.
+```
+
+For production validation, execute the complete pipeline through:
+
+```bash
+sudo systemctl start secure-rag-backup.service
+```
+
+For manual, interactive archival using the repository helper, the repository script remains
+available:
+
+```bash
+AWS_PROFILE=secure-rag-backup ./scripts/archive_backup.sh backups/<TIMESTAMP>
+```
+
+Likewise, the repository retention helper remains available for manual administrative use:
+
+```bash
+AWS_PROFILE=secure-rag-backup ./scripts/cleanup_remote_backups.sh
+```
+
+The systemd automation does not execute those repository paths as the `secure-rag-backup`
+user. It executes the root-owned copies under `/usr/local/libexec`.
+
+## Host-Installed Helper Maintenance
+
+The host-installed helper copies should be refreshed whenever the corresponding repository
+scripts change:
+
+```bash
+sudo install -o root -g root -m 0755 \
+  /home/shiva/Projects/secure-rag/scripts/archive_backup.sh \
+  /usr/local/libexec/secure-rag-archive-backup
+
+sudo install -o root -g root -m 0755 \
+  /home/shiva/Projects/secure-rag/scripts/cleanup_remote_backups.sh \
+  /usr/local/libexec/secure-rag-cleanup-remote-backups
+```
+
+Verify ownership and mode:
+
+```bash
+sudo ls -l \
+  /usr/local/libexec/secure-rag-archive-backup \
+  /usr/local/libexec/secure-rag-cleanup-remote-backups
+```
+
+Both files should be executable and owned by `root:root`.
+
+Verify that the service account can execute them:
+
+```bash
+sudo -u secure-rag-backup test -x \
+  /usr/local/libexec/secure-rag-archive-backup
+
+sudo -u secure-rag-backup test -x \
+  /usr/local/libexec/secure-rag-cleanup-remote-backups
+```
+
+## Persistent Application Storage
+
+The application document volume remains:
+
+```text
+secure-rag_app_storage
+```
+
+and is mounted inside the application containers at:
+
+```text
+/app/storage
+```
+
+The obsolete Compose `storage-init` container is not part of the current Compose
+configuration and should not be recreated merely to fix backup permissions.
+
+Do not remove the `secure-rag_app_storage` volume when cleaning up obsolete containers.
+
+## Backup Operational Checkpoint
+
+After a successful production run, validate all of the following:
+
+```text
+✓ local backup created
+✓ checksum manifest verified
+✓ PostgreSQL dump present
+✓ uploaded documents present
+✓ Qdrant full snapshot present
+✓ S3 upload completed
+✓ remote S3 objects verified
+✓ remote retention completed
+✓ secure-rag-backup.service exited with status 0
+✓ secure-rag-backup.timer remains enabled and waiting
+```
+
+Production backups must not be considered protected against host loss until the
+corresponding local backup has also been archived successfully to the remote S3 location.
+
+---
+
 # Current Phase 8 Operational Status
 
 ```text
