@@ -703,7 +703,8 @@ def check_redis() -> None:
 
 def check_qdrant() -> None:
     client = QdrantClient(
-        url=settings.qdrant_url
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key,
     )
 
     try:

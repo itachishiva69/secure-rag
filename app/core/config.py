@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     database_url: str
 
     qdrant_url: str
+    qdrant_api_key: str | None = None
     qdrant_collection: str = "documents"
 
     jwt_secret: str
