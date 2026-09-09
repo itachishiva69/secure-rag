@@ -26,17 +26,16 @@ def create_chunk(
 def test_reranker_model_load_failure_is_wrapped(
     monkeypatch,
 ):
-    def failing_cross_encoder(
-        model_name,
-        device,
+    def failing_text_cross_encoder(
+        **kwargs,
     ):
         raise RuntimeError(
             "internal model loading failure"
         )
 
     monkeypatch.setattr(
-        "app.rag.reranker.CrossEncoder",
-        failing_cross_encoder,
+        "app.rag.reranker.TextCrossEncoder",
+        failing_text_cross_encoder,
     )
 
     with pytest.raises(
@@ -53,7 +52,7 @@ def test_reranker_inference_failure_is_wrapped():
 
     reranker.model = Mock()
 
-    reranker.model.predict.side_effect = (
+    reranker.model.rerank.side_effect = (
         RuntimeError(
             "internal inference failure"
         )
@@ -81,7 +80,7 @@ def test_reranker_rejects_wrong_score_count():
 
     reranker.model = Mock()
 
-    reranker.model.predict.return_value = [
+    reranker.model.rerank.return_value = [
         1.0,
     ]
 
@@ -117,7 +116,7 @@ def test_reranker_rejects_malformed_scores():
 
     reranker.model = Mock()
 
-    reranker.model.predict.return_value = [
+    reranker.model.rerank.return_value = [
         "not-a-number",
     ]
 
@@ -153,7 +152,7 @@ def test_reranker_rejects_non_finite_scores(
 
     reranker.model = Mock()
 
-    reranker.model.predict.return_value = [
+    reranker.model.rerank.return_value = [
         score,
     ]
 
@@ -179,9 +178,7 @@ def test_reranker_rejects_invalid_score_collection():
 
     reranker.model = Mock()
 
-    reranker.model.predict.return_value = (
-        1.0
-    )
+    reranker.model.rerank.return_value = 1.0
 
     chunk = create_chunk(
         document_id=1,
@@ -191,7 +188,7 @@ def test_reranker_rejects_invalid_score_collection():
 
     with pytest.raises(
         RerankerError,
-        match="Reranker returned invalid scores",
+        match="Reranker inference failed",
     ):
         reranker.rerank(
             query="test query",

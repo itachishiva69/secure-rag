@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 30.0
 
     reranker_model: str = (
-        "cross-encoder/ms-marco-MiniLM-L6-v2"
+        "Xenova/ms-marco-MiniLM-L-6-v2"
     )
     reranker_candidate_limit: int = 10
 
@@ -80,10 +80,11 @@ class Settings(BaseSettings):
             "staging",
             "production",
         }
+
         if self.login_rate_limit_requests <= 0:
             raise ValueError(
-        "LOGIN_RATE_LIMIT_REQUESTS "
-        "must be positive"
+                "LOGIN_RATE_LIMIT_REQUESTS "
+                "must be positive"
             )
 
         if self.login_rate_limit_window_seconds <= 0:
@@ -91,6 +92,7 @@ class Settings(BaseSettings):
                 "LOGIN_RATE_LIMIT_WINDOW_SECONDS "
                 "must be positive"
             )
+
         if self.app_env not in allowed_envs:
             raise ValueError(
                 "APP_ENV must be one of: "
@@ -330,7 +332,6 @@ class Settings(BaseSettings):
         field_name: str,
     ) -> None:
         parsed = urlparse(url)
-
         hostname = parsed.hostname
 
         if hostname in {

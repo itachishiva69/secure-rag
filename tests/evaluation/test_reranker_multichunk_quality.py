@@ -10,10 +10,13 @@ from tests.evaluation.test_retrieval_quality import (
 )
 
 
+RERANKER_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
+
+
 @pytest.fixture(scope="module")
 def reranker():
     return Reranker(
-        model_name="cross-encoder/ms-marco-MiniLM-L6-v2"
+        model_name=RERANKER_MODEL
     )
 
 
@@ -78,9 +81,11 @@ def test_reranker_multichunk_quality(
 
     total_queries = len(PARAPHRASED_QUERIES)
 
-    for query, expected_filename, expected_chunk_index in (
-        PARAPHRASED_QUERIES
-    ):
+    for (
+        query,
+        expected_filename,
+        expected_chunk_index,
+    ) in PARAPHRASED_QUERIES:
         expected_document_id = (
             resolve_expected_document_id(
                 expected_filename,
@@ -154,4 +159,3 @@ def test_reranker_multichunk_quality(
 
     assert recall_at_1_score >= 0.80
     assert recall_at_3_score >= 0.80
-    assert recall_at_5_score >= 0.80

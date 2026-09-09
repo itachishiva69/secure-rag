@@ -1,14 +1,17 @@
 from functools import lru_cache
 
-from sentence_transformers import SentenceTransformer
-
+import numpy as np
+from fastembed import TextEmbedding
 
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
 
 
 class EmbeddingService:
     def __init__(self, model_name: str = MODEL_NAME):
-        self.model = SentenceTransformer(model_name)
+        self.model = TextEmbedding(
+            model_name=model_name,
+            lazy_load=True,
+        )
 
     def embed_documents(
         self,
@@ -17,29 +20,27 @@ class EmbeddingService:
         if not texts:
             return []
 
-        embeddings = self.model.encode(
+        embeddings = self.model.embed(
             texts,
             batch_size=32,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-            show_progress_bar=False,
         )
 
-        return embeddings.tolist()
+        return [embedding.tolist() for embedding in embeddings]
 
     def embed_query(self, text: str) -> list[float]:
-        embedding = self.model.encode(
-            text,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-            show_progress_bar=False,
+        embedding = next(
+            self.model.embed([text]),
         )
 
         return embedding.tolist()
 
     @property
     def dimension(self) -> int:
-        return self.model.get_embedding_dimension()
+        return len(
+            next(
+                self.model.embed(["dimension check"]),
+            )
+        )
 
 
 @lru_cache

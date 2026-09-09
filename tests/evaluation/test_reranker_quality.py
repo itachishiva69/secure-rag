@@ -10,10 +10,13 @@ from tests.evaluation.test_retrieval_quality import (
 )
 
 
+RERANKER_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
+
+
 @pytest.fixture(scope="module")
 def reranker():
     return Reranker(
-        model_name="cross-encoder/ms-marco-MiniLM-L6-v2"
+        model_name=RERANKER_MODEL
     )
 
 

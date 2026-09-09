@@ -2,10 +2,13 @@ from dataclasses import dataclass
 from functools import lru_cache
 import math
 
-from sentence_transformers import CrossEncoder
+from fastembed.rerank.cross_encoder import TextCrossEncoder
 
 from app.core.config import get_settings
 from app.schemas.query import RetrievedChunk
+
+
+DEFAULT_RERANKER_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
 
 
 class RerankerError(Exception):
@@ -24,12 +27,15 @@ class Reranker:
         model_name: str | None = None,
     ):
         if model_name is None:
-            model_name = get_settings().reranker_model
+            model_name = (
+                get_settings().reranker_model
+            )
 
         try:
-            self.model = CrossEncoder(
-                model_name,
-                device="cpu",
+            self.model = TextCrossEncoder(
+                model_name=model_name,
+                lazy_load=True,
+                threads=1,
             )
         except Exception as exc:
             raise RerankerError(
@@ -56,32 +62,28 @@ class Reranker:
         if not chunks:
             return []
 
-        pairs = [
-            (
-                query,
-                chunk.text,
-            )
+        documents = [
+            chunk.text
             for chunk in chunks
         ]
 
         try:
-            scores = self.model.predict(
-                pairs,
-                show_progress_bar=False,
+            scores = list(
+                self.model.rerank(
+                    query=query,
+                    documents=documents,
+                    batch_size=min(
+                        len(documents),
+                        32,
+                    ),
+                )
             )
         except Exception as exc:
             raise RerankerError(
                 "Reranker inference failed"
             ) from exc
 
-        try:
-            score_count = len(scores)
-        except Exception as exc:
-            raise RerankerError(
-                "Reranker returned invalid scores"
-            ) from exc
-
-        if score_count != len(chunks):
+        if len(scores) != len(chunks):
             raise RerankerError(
                 "Reranker returned an unexpected "
                 "number of scores"
@@ -110,8 +112,6 @@ class Reranker:
                         score=numeric_score,
                     )
                 )
-        except RerankerError:
-            raise
         except Exception as exc:
             raise RerankerError(
                 "Reranker returned invalid scores"

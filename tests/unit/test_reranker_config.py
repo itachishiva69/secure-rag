@@ -9,7 +9,7 @@ def test_reranker_settings_have_expected_defaults():
     )
 
     assert settings.reranker_model == (
-        "cross-encoder/ms-marco-MiniLM-L6-v2"
+        "Xenova/ms-marco-MiniLM-L-6-v2"
     )
 
     assert settings.reranker_candidate_limit == 10
