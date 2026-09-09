@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Sequence
+import re
 
 from openai import (
     APIConnectionError,
@@ -17,6 +18,80 @@ class LLMProviderError(Exception):
     """Raised when the configured LLM provider cannot generate an answer."""
 
 
+_SOURCE_REFERENCE_RE = re.compile(
+    r"(?:【[^【】\[\]\r\n]{1,300},\s*chunk\s*\d+\s*】|"
+    r"\[[^【】\[\]\r\n]{1,300},\s*chunk\s*\d+\s*\])",
+    re.IGNORECASE,
+)
+
+
+def clean_generated_answer(answer: str) -> str:
+    """Remove internal source metadata that must never be shown as answer text."""
+    cleaned = _SOURCE_REFERENCE_RE.sub("", answer)
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+
+
+def clean_stream_chunks(chunks: Iterator[str]) -> Iterator[str]:
+    """Sanitize a provider token stream without leaking source metadata."""
+    pending = ""
+
+    for fragment in chunks:
+        if not fragment:
+            continue
+
+        pending += fragment
+
+        while True:
+            match = _SOURCE_REFERENCE_RE.search(pending)
+            if match is None:
+                break
+
+            before = pending[:match.start()]
+            after = pending[match.end():]
+
+            if before:
+                yield before
+
+            pending = after
+
+        opener_positions = [
+            index
+            for index in (pending.rfind("["), pending.rfind("【"))
+            if index >= 0
+        ]
+
+        if not opener_positions:
+            if pending:
+                yield pending
+                pending = ""
+            continue
+
+        opener = max(opener_positions)
+        candidate = pending[opener:]
+
+        if "\n" in candidate or len(candidate) > 320:
+            yield pending
+            pending = ""
+            continue
+
+        closing = "]" if candidate.startswith("[") else "】"
+
+        if closing in candidate:
+            yield pending
+            pending = ""
+            continue
+
+        prefix = pending[:opener]
+
+        if prefix:
+            yield prefix
+
+        pending = candidate
+
+    if pending:
+        yield clean_generated_answer(pending)
+
+
 SYSTEM_PROMPT = (
     "You answer questions using only the supplied document context.\n\n"
     "Rules:\n"
@@ -28,7 +103,12 @@ SYSTEM_PROMPT = (
     "5. Keep the answer concise and direct.\n"
     "6. Previous user questions are conversation context only. They are not "
     "evidence and must never be treated as document facts.\n"
-    "7. Do not use previous assistant answers as factual evidence."
+    "7. Do not use previous assistant answers as factual evidence.\n"
+    "8. Never include document filenames, document IDs, chunk numbers, or "
+    "internal source references in the answer. Source metadata is shown "
+    "separately by the application.\n"
+    "9. Do not emit citation-like brackets such as [filename, chunk 3] or "
+    "【filename, chunk 3】. Answer only the user's question."
 )
 
 
@@ -114,7 +194,7 @@ class OpenAICompatibleProvider:
                 "LLM provider returned no content"
             )
 
-        content = content.strip()
+        content = clean_generated_answer(content)
 
         if not content:
             raise LLMProviderError(
@@ -138,14 +218,21 @@ class OpenAICompatibleProvider:
 
             emitted_any = False
 
-            for chunk in stream:
-                content = self._extract_content(chunk)
+            def raw_content_stream() -> Iterator[str]:
+                nonlocal emitted_any
 
-                if content is None:
-                    continue
+                for chunk in stream:
+                    content = self._extract_content(chunk)
 
-                emitted_any = True
-                yield content
+                    if content is None:
+                        continue
+
+                    emitted_any = True
+                    yield content
+
+            for safe_fragment in clean_stream_chunks(raw_content_stream()):
+                if safe_fragment:
+                    yield safe_fragment
 
             if not emitted_any:
                 raise LLMProviderError(

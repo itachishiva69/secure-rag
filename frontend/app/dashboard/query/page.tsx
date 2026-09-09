@@ -312,6 +312,7 @@ export default function QueryPage() {
     }
 
     let conversationId = activeConversationIdRef.current;
+    let createdConversationForThisQuery = false;
 
     if (!conversationId) {
       setCreatingConversation(true);
@@ -322,6 +323,7 @@ export default function QueryPage() {
         );
 
         conversationId = conversation.id;
+        createdConversationForThisQuery = true;
         activeConversationIdRef.current = conversation.id;
 
         setConversations((current) =>
@@ -458,6 +460,23 @@ export default function QueryPage() {
         setStreamSources([]);
       }
     } catch (requestError) {
+      if (createdConversationForThisQuery && conversationId) {
+        try {
+          await deleteConversation(conversationId);
+
+          setConversations((current) =>
+            current.filter((item) => item.id !== conversationId),
+          );
+
+          activeConversationIdRef.current = null;
+          setActiveConversation(null);
+          setStreamedAnswer("");
+          setStreamSources([]);
+        } catch {
+          // Keep the original query/stream error visible if cleanup fails.
+        }
+      }
+
       if (
         requestError instanceof DOMException &&
         requestError.name === "AbortError"
