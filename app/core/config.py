@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     )
     reranker_candidate_limit: int = 10
 
+    # Render Free runs only the Web Service, so production can
+    # process the durable PostgreSQL outbox inside the API process.
+    # Local Docker keeps using the dedicated RQ worker/scheduler.
+    inline_background_processing_enabled: bool = False
+
     query_rate_limit_requests: int = 30
     query_rate_limit_window_seconds: int = 60
 

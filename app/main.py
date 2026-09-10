@@ -50,6 +50,11 @@ from app.core.request_context import (
 from app.db.database import engine
 from app.services.model_warmup import warm_models
 from app.services.queue import get_redis
+from app.services.runtime import (
+    get_runtime_state,
+    start_runtime,
+    stop_runtime,
+)
 
 
 settings = get_settings()
@@ -273,7 +278,11 @@ async def lifespan(
         },
     )
 
+    start_runtime()
+
     yield
+
+    stop_runtime()
 
     logger.info(
         "application_shutdown"
@@ -723,6 +732,28 @@ def health():
 
 @app.get("/ready")
 def readiness():
+    # Render probes this endpoint frequently. In production,
+    # return the cached dependency state maintained by the
+    # runtime monitor instead of opening three external
+    # connections on every health probe.
+    if settings.app_env == "production":
+        state = get_runtime_state().snapshot()
+
+        if not state["ready"]:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "failed_dependencies": (
+                        state["failed_dependencies"]
+                    ),
+                },
+            )
+
+        return {
+            "status": "ready"
+        }
+
     dependency_checks = {
         "database": check_database,
         "redis": check_redis,
