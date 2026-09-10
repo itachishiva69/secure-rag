@@ -72,7 +72,9 @@ def test_dispatch_failure_does_not_reset_active_processing_document(
     db_session,
     monkeypatch,
 ):
-    department = create_department(db_session)
+    department = create_department(
+        db_session
+    )
 
     admin = create_admin(
         db_session,
@@ -85,14 +87,19 @@ def test_dispatch_failure_does_not_reset_active_processing_document(
         department_id=department.id,
     )
 
-    document.status = DocumentStatus.PROCESSING
+    document.status = (
+        DocumentStatus.PROCESSING
+    )
+
     document.processing_started_at = (
         datetime.now(timezone.utc)
     )
 
-    event = outbox.create_ingestion_outbox_event(
-        db_session,
-        document_id=document.id,
+    event = (
+        outbox.create_ingestion_outbox_event(
+            db_session,
+            document_id=document.id,
+        )
     )
 
     db_session.commit()
@@ -118,8 +125,13 @@ def test_dispatch_failure_does_not_reset_active_processing_document(
         )
     )
 
-    db_session.refresh(document)
-    db_session.refresh(event)
+    db_session.refresh(
+        document
+    )
+
+    db_session.refresh(
+        event
+    )
 
     assert dispatched_ids == []
 
@@ -127,7 +139,10 @@ def test_dispatch_failure_does_not_reset_active_processing_document(
         DocumentStatus.PROCESSING
     )
 
-    assert document.processing_started_at is not None
+    assert (
+        document.processing_started_at
+        is not None
+    )
 
     assert event.status == (
         outbox.OUTBOX_PENDING

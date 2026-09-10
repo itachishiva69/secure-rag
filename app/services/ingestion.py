@@ -1,8 +1,9 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import Document
 from app.models.document_status import DocumentStatus
 from app.rag.qdrant_store import (
@@ -18,6 +19,32 @@ from app.services.document_extractor import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _is_stale_processing_document(
+    document: Document,
+) -> bool:
+    processing_started_at = (
+        document.processing_started_at
+    )
+
+    if processing_started_at is None:
+        return True
+
+    settings = get_settings()
+
+    stale_after = timedelta(
+        minutes=(
+            settings.reconciliation_stale_processing_minutes
+        )
+    )
+
+    cutoff = (
+        datetime.now(timezone.utc)
+        - stale_after
+    )
+
+    return processing_started_at < cutoff
 
 
 def ingest_document(
@@ -50,9 +77,41 @@ def ingest_document(
     if document.status == (
         DocumentStatus.PROCESSING
     ):
-        raise ValueError(
-            f"Document {document_id} is already processing"
-        )
+        if _is_stale_processing_document(
+            document
+        ):
+            logger.warning(
+                "document_ingestion_stale_state_recovered",
+                extra={
+                    "document_id": document_id,
+                    "processing_started_at": (
+                        document.processing_started_at
+                    ),
+                },
+            )
+
+            document.status = (
+                DocumentStatus.UPLOADED
+            )
+
+            document.processing_started_at = None
+
+            db.flush()
+
+        else:
+            logger.info(
+                "document_ingestion_already_in_progress",
+                extra={
+                    "document_id": document_id,
+                    "processing_started_at": (
+                        document.processing_started_at
+                    ),
+                },
+            )
+
+            # Another worker currently owns ingestion.
+            # Do not fight it or reset its state.
+            return 0
 
     document.status = (
         DocumentStatus.PROCESSING

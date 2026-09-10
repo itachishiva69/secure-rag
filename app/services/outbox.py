@@ -5,8 +5,7 @@ from rq.exceptions import DuplicateJobError
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
-from app.models import Document, OutboxEvent
-from app.models.document_status import DocumentStatus
+from app.models import OutboxEvent
 from app.services.queue import (
     enqueue_cleanup_job,
     enqueue_ingestion_job,
@@ -167,34 +166,6 @@ def _mark_event_retryable(
     event: OutboxEvent,
     exc: Exception,
 ) -> None:
-    if event.event_type == INGEST_DOCUMENT_EVENT:
-        document = db.get(
-            Document,
-            event.document_id,
-        )
-
-        # A process restart can leave ingestion stuck in
-        # PROCESSING even though the durable outbox event still
-        # needs delivery. Reset that orphaned state so the retry
-        # can enter the normal UPLOADED -> PROCESSING transition.
-        if (
-            document is not None
-            and document.status
-            == DocumentStatus.PROCESSING
-        ):
-            document.status = (
-                DocumentStatus.UPLOADED
-            )
-            document.processing_started_at = None
-
-            logger.warning(
-                "outbox_ingestion_state_recovered",
-                extra={
-                    "outbox_event_id": event.id,
-                    "document_id": event.document_id,
-                },
-            )
-
     event.available_at = (
         datetime.now(timezone.utc)
         + timedelta(
