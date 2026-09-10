@@ -56,6 +56,55 @@ def ingest_document_job(
         raise
 
 
+def mark_document_ingestion_failed(
+    document_id: int,
+) -> bool:
+    """
+    Permanently fail an ingestion that exhausted its
+    durable outbox retry budget.
+
+    Only a document still in PROCESSING is changed. This
+    prevents a late retry from overwriting a newer lifecycle
+    state such as INDEXED, DELETING, or an existing failure.
+
+    Returns True when the document was transitioned to FAILED.
+    """
+
+    with SessionLocal() as db:
+        document = db.get(
+            Document,
+            document_id,
+        )
+
+        if document is None:
+            logger.warning(
+                "document_ingestion_failure_document_missing",
+                extra={
+                    "document_id": document_id,
+                },
+            )
+            return False
+
+        if document.status != DocumentStatus.PROCESSING:
+            return False
+
+        document.status = (
+            DocumentStatus.FAILED
+        )
+        document.processing_started_at = None
+
+        db.commit()
+
+        logger.error(
+            "document_ingestion_permanently_failed",
+            extra={
+                "document_id": document_id,
+            },
+        )
+
+        return True
+
+
 def delete_document_job(
     document_id: int,
 ) -> None:

@@ -14,6 +14,7 @@ from app.models import OutboxEvent
 from app.services.jobs import (
     delete_document_job,
     ingest_document_job,
+    mark_document_ingestion_failed,
     reconcile_stale_documents_job,
 )
 from app.services.outbox import (
@@ -486,6 +487,11 @@ class InlineRuntime:
                                 "attempts": attempts,
                             },
                         )
+
+                        if event_type == INGEST_DOCUMENT_EVENT:
+                            mark_document_ingestion_failed(
+                                document_id
+                            )
 
                     else:
                         _mark_event_retryable(
