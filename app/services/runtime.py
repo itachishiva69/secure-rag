@@ -1,6 +1,8 @@
 import logging
-import threading
+import os
 from datetime import datetime, timezone
+from pathlib import Path
+import threading
 
 from qdrant_client import QdrantClient
 from sqlalchemy import text
@@ -16,7 +18,6 @@ from app.services.jobs import (
 from app.services.outbox import (
     DELETE_DOCUMENT_EVENT,
     INGEST_DOCUMENT_EVENT,
-    OUTBOX_PENDING,
     _claim_next_pending_event,
     _mark_event_dispatched,
     _mark_event_retryable,
@@ -25,7 +26,6 @@ from app.services.queue import get_redis
 
 
 logger = logging.getLogger(__name__)
-
 settings = get_settings()
 
 INLINE_POLL_SECONDS = 2.0
@@ -50,8 +50,8 @@ class RuntimeState:
                 failed_dependencies
             )
             self._ready = not failed_dependencies
-            self._last_check_at = datetime.now(
-                timezone.utc
+            self._last_check_at = (
+                datetime.now(timezone.utc)
             )
 
     def snapshot(self) -> dict:
@@ -116,10 +116,10 @@ class InlineRuntime:
         self.processing_enabled = (
             processing_enabled
         )
-
         self._stop_event = threading.Event()
-
-        self._threads: list[threading.Thread] = []
+        self._threads: list[
+            threading.Thread
+        ] = []
 
     def start(self) -> None:
         logger.info(
@@ -131,8 +131,27 @@ class InlineRuntime:
             },
         )
 
-        # Perform one synchronous dependency check before
-        # FastAPI declares the application ready.
+        storage_path = Path(
+            settings.storage_path
+        )
+
+        logger.info(
+            "runtime_storage_check",
+            extra={
+                "storage_path": str(storage_path),
+                "exists": storage_path.exists(),
+                "is_dir": storage_path.is_dir(),
+                "writable": (
+                    os.access(
+                        storage_path,
+                        os.W_OK,
+                    )
+                    if storage_path.exists()
+                    else False
+                ),
+            },
+        )
+
         runtime_state.refresh_dependencies()
 
         health_thread = threading.Thread(
@@ -178,7 +197,9 @@ class InlineRuntime:
         logger.info(
             "inline_processing_started",
             extra={
-                "poll_seconds": INLINE_POLL_SECONDS,
+                "poll_seconds": (
+                    INLINE_POLL_SECONDS
+                ),
                 "maintenance_interval_seconds": (
                     settings.reconciliation_interval_seconds
                 ),
@@ -193,7 +214,9 @@ class InlineRuntime:
         self._stop_event.set()
 
         for thread in self._threads:
-            thread.join(timeout=5)
+            thread.join(
+                timeout=5
+            )
 
         self._threads.clear()
 
@@ -238,8 +261,6 @@ class InlineRuntime:
                 )
 
     def _maintenance_loop(self) -> None:
-        # Run once on startup so old stale work can be
-        # recovered immediately.
         self._run_maintenance()
 
         while not self._stop_event.wait(
@@ -250,7 +271,9 @@ class InlineRuntime:
     @staticmethod
     def _run_maintenance() -> None:
         try:
-            result = reconcile_stale_documents_job()
+            result = (
+                reconcile_stale_documents_job()
+            )
 
             if (
                 result["processing"]
@@ -269,7 +292,9 @@ class InlineRuntime:
     @staticmethod
     def _process_one_outbox_event() -> bool:
         with SessionLocal() as db:
-            event = _claim_next_pending_event(db)
+            event = (
+                _claim_next_pending_event(db)
+            )
 
             if event is None:
                 return False
@@ -290,19 +315,23 @@ class InlineRuntime:
         )
 
         try:
-            if event_type == INGEST_DOCUMENT_EVENT:
+            if event_type == (
+                INGEST_DOCUMENT_EVENT
+            ):
                 ingest_document_job(
                     document_id
                 )
 
-            elif event_type == DELETE_DOCUMENT_EVENT:
+            elif event_type == (
+                DELETE_DOCUMENT_EVENT
+            ):
                 delete_document_job(
                     document_id
                 )
 
             else:
                 raise ValueError(
-                    f"Unsupported outbox event type: "
+                    "Unsupported outbox event type: "
                     f"{event_type}"
                 )
 
@@ -324,12 +353,10 @@ class InlineRuntime:
                 )
 
                 if current_event is not None:
-                    if attempts >= INLINE_MAX_JOB_ATTEMPTS:
-                        # Match the existing RQ retry boundary:
-                        # leave the document FAILED/DELETING for
-                        # reconciliation and finalize the event
-                        # so a permanently broken job does not
-                        # retry forever.
+                    if (
+                        attempts
+                        >= INLINE_MAX_JOB_ATTEMPTS
+                    ):
                         _mark_event_dispatched(
                             db,
                             current_event,
@@ -355,9 +382,6 @@ class InlineRuntime:
             return True
 
         else:
-            # Deletion can remove the document, which cascades
-            # the outbox row. Re-fetch the event instead of
-            # keeping the original ORM object alive.
             with SessionLocal() as db:
                 current_event = db.get(
                     OutboxEvent,
@@ -418,7 +442,7 @@ def start_runtime() -> InlineRuntime:
     runtime = InlineRuntime(
         processing_enabled=(
             settings.inline_background_processing_enabled
-        ),
+        )
     )
 
     runtime.start()
@@ -435,6 +459,7 @@ def stop_runtime() -> None:
         return
 
     _runtime.stop()
+
     _runtime = None
 
 

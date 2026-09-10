@@ -1,4 +1,5 @@
 from codecs import getincrementaldecoder
+import logging
 from pathlib import Path
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile, is_zipfile
@@ -9,6 +10,7 @@ from app.core.config import get_settings
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {
     ".pdf",
@@ -227,5 +229,18 @@ async def save_uploaded_file(
 
     finally:
         await file.close()
+
+    logger.info(
+        "stored_file_verified",
+        extra={
+            "path": str(destination),
+            "exists": destination.exists(),
+            "size": (
+                destination.stat().st_size
+                if destination.exists()
+                else None
+            ),
+        },
+    )
 
     return str(destination)
