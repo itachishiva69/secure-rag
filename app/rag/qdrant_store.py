@@ -1,4 +1,3 @@
-from functools import lru_cache
 from uuid import UUID, uuid5
 
 from qdrant_client import QdrantClient
@@ -7,6 +6,7 @@ from qdrant_client.models import (
     FieldCondition,
     Filter,
     MatchAny,
+    PayloadSchemaType,
     PointStruct,
     VectorParams,
 )
@@ -16,6 +16,7 @@ from app.rag.embeddings import get_embedding_service
 
 
 settings = get_settings()
+
 
 client = QdrantClient(
     url=settings.qdrant_url,
@@ -57,9 +58,6 @@ def _qdrant_call(
 def _collection_exists() -> bool:
     """
     Return whether the configured collection exists.
-
-    Only the direct Qdrant call is wrapped. Embedding/model failures
-    remain separate failures because they are not Qdrant failures.
     """
     collections = _qdrant_call(
         operation="collection lookup",
@@ -72,25 +70,80 @@ def _collection_exists() -> bool:
     )
 
 
+def _ensure_payload_indexes() -> None:
+    """
+    Ensure all payload fields used by Qdrant filters have indexes.
+
+    The collection may have been created before payload indexes
+    were introduced, so this check must run even when the collection
+    already exists.
+
+    Current filtered fields:
+
+        document_id: integer
+        department_ids: integer
+    """
+    collection_info = _qdrant_call(
+        operation="collection inspection",
+        func=lambda: client.get_collection(
+            collection_name=settings.qdrant_collection,
+        ),
+    )
+
+    payload_schema = (
+        collection_info.payload_schema or {}
+    )
+
+    required_indexes = {
+        "document_id": PayloadSchemaType.INTEGER,
+        "department_ids": PayloadSchemaType.INTEGER,
+    }
+
+    for field_name, field_schema in required_indexes.items():
+        if field_name in payload_schema:
+            continue
+
+        def create_index(
+            field_name=field_name,
+            field_schema=field_schema,
+        ):
+            return client.create_payload_index(
+                collection_name=settings.qdrant_collection,
+                field_name=field_name,
+                field_schema=field_schema,
+            )
+
+        _qdrant_call(
+            operation=(
+                f"payload index creation for {field_name}"
+            ),
+            func=create_index,
+        )
+
+
 def ensure_collection() -> None:
     """
     Create the Qdrant collection if it does not already exist.
+
+    Also ensures all payload indexes required by the application.
+    This intentionally runs for existing collections too so that
+    deployments can upgrade an existing Qdrant collection schema.
     """
     embedding_service = get_embedding_service()
 
-    if _collection_exists():
-        return
-
-    _qdrant_call(
-        operation="collection creation",
-        func=lambda: client.create_collection(
-            collection_name=settings.qdrant_collection,
-            vectors_config=VectorParams(
-                size=embedding_service.dimension,
-                distance=Distance.COSINE,
+    if not _collection_exists():
+        _qdrant_call(
+            operation="collection creation",
+            func=lambda: client.create_collection(
+                collection_name=settings.qdrant_collection,
+                vectors_config=VectorParams(
+                    size=embedding_service.dimension,
+                    distance=Distance.COSINE,
+                ),
             ),
-        ),
-    )
+        )
+
+    _ensure_payload_indexes()
 
 
 def delete_document_vectors(
@@ -101,6 +154,8 @@ def delete_document_vectors(
     """
     if not _collection_exists():
         return
+
+    ensure_collection()
 
     _qdrant_call(
         operation="document vector deletion",
@@ -131,6 +186,7 @@ def index_chunks(
     Generate embeddings for document chunks and store them in Qdrant.
 
     Each chunk receives a deterministic UUID based on:
+
         document_id + chunk_index
 
     Re-indexing the same document therefore produces the same point IDs.
