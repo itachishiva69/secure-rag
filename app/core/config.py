@@ -23,7 +23,13 @@ class Settings(BaseSettings):
 
     max_upload_size_mb: int = 25
     max_request_body_size_mb: int = 30
+
+    storage_backend: str = "local"
     storage_path: str = "storage/documents"
+
+    cloudinary_cloud_name: str | None = None
+    cloudinary_api_key: str | None = None
+    cloudinary_api_secret: str | None = None
 
     redis_url: str = "redis://localhost:6379/0"
 
@@ -85,6 +91,17 @@ class Settings(BaseSettings):
             "staging",
             "production",
         }
+
+        allowed_storage_backends = {
+            "local",
+            "cloudinary",
+        }
+
+        if self.storage_backend not in allowed_storage_backends:
+            raise ValueError(
+                "STORAGE_BACKEND must be one of: "
+                "local, cloudinary"
+            )
 
         if self.login_rate_limit_requests <= 0:
             raise ValueError(
@@ -288,6 +305,30 @@ class Settings(BaseSettings):
             self.redis_url,
             "REDIS_URL",
         )
+
+        if self.storage_backend == "local":
+            raise ValueError(
+                "STORAGE_BACKEND must be cloudinary "
+                "when APP_ENV=production"
+            )
+
+        if not self.cloudinary_cloud_name:
+            raise ValueError(
+                "CLOUDINARY_CLOUD_NAME is required "
+                "when APP_ENV=production"
+            )
+
+        if not self.cloudinary_api_key:
+            raise ValueError(
+                "CLOUDINARY_API_KEY is required "
+                "when APP_ENV=production"
+            )
+
+        if not self.cloudinary_api_secret:
+            raise ValueError(
+                "CLOUDINARY_API_SECRET is required "
+                "when APP_ENV=production"
+            )
 
         if not Path(self.storage_path).is_absolute():
             raise ValueError(

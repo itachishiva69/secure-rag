@@ -34,3 +34,5 @@ openai
 prometheus-client
 
 fastembed==0.8.0
+cloudinary
+requests

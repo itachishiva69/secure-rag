@@ -1,18 +1,19 @@
 import logging
 from datetime import timedelta
-from pathlib import Path
 
 from app.core.config import get_settings
 from app.db.database import SessionLocal
 from app.models import Document
 from app.models.document_status import DocumentStatus
 from app.rag.qdrant_store import delete_document_vectors
+from app.services.file_storage import delete_stored_file
 from app.services.ingestion import ingest_document
 from app.services.outbox import dispatch_pending_outbox_events
 from app.services.reconciliation import (
     reconcile_stale_deleting_documents,
     reconcile_stale_processing_documents,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -108,19 +109,16 @@ def delete_document_job(
                 )
                 return
 
-            storage_path = document.storage_path
+            storage_reference = (
+                document.storage_path
+            )
 
-            # External cleanup happens before the database row is
-            # removed. If Qdrant fails, the PostgreSQL row remains
-            # in DELETING state and the RQ retry can safely try again.
             delete_document_vectors(
                 document_id
             )
 
-            Path(
-                storage_path
-            ).unlink(
-                missing_ok=True
+            delete_stored_file(
+                storage_reference
             )
 
             db.delete(

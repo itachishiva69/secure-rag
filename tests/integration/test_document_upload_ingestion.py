@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -117,6 +118,15 @@ def create_user(
     db_session.flush()
 
     return user
+
+
+@pytest.fixture(autouse=True)
+def force_local_storage_backend(monkeypatch):
+    monkeypatch.setattr(
+        file_storage.settings,
+        "storage_backend",
+        "local",
+    )
 
 
 def test_admin_uploads_document_and_worker_indexes_it(

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from fastapi import (
     APIRouter,
     Depends,
@@ -33,6 +31,7 @@ from app.services.document_service import (
     update_document_departments,
 )
 from app.services.file_storage import (
+    delete_stored_file,
     save_uploaded_file,
 )
 from app.services.outbox import (
@@ -108,16 +107,6 @@ def enforce_upload_rate_limit(
                 "is temporarily unavailable."
             ),
         ) from exc
-
-
-def delete_stored_file(
-    storage_path: str,
-) -> None:
-    Path(
-        storage_path
-    ).unlink(
-        missing_ok=True
-    )
 
 
 def build_document_response(

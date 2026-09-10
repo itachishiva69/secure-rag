@@ -17,7 +17,7 @@ services:
         condition: service_healthy
     environment:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-120}
-      APP_ENV: production
+      APP_ENV: development
       APP_NAME: ${APP_NAME:-Secure RAG}
       CONTEXT_MAX_CHARS: ${CONTEXT_MAX_CHARS:-12000}
 
@@ -55,6 +55,7 @@ services:
       RERANKER_CANDIDATE_LIMIT: ${RERANKER_CANDIDATE_LIMIT:-10}
       RERANKER_MODEL: ${RERANKER_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
 
+      STORAGE_BACKEND: local
       STORAGE_PATH: /app/storage/documents
 
       UPLOAD_RATE_LIMIT_REQUESTS: ${UPLOAD_RATE_LIMIT_REQUESTS:-10}
@@ -223,7 +224,7 @@ services:
 
     environment:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-120}
-      APP_ENV: production
+      APP_ENV: development
       APP_NAME: ${APP_NAME:-Secure RAG}
       CONTEXT_MAX_CHARS: ${CONTEXT_MAX_CHARS:-12000}
 
@@ -251,6 +252,7 @@ services:
       RERANKER_CANDIDATE_LIMIT: ${RERANKER_CANDIDATE_LIMIT:-10}
       RERANKER_MODEL: ${RERANKER_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
 
+      STORAGE_BACKEND: local
       STORAGE_PATH: /app/storage/documents
 
     restart: unless-stopped
@@ -280,7 +282,7 @@ services:
 
     environment:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-120}
-      APP_ENV: production
+      APP_ENV: development
       APP_NAME: ${APP_NAME:-Secure RAG}
       CONTEXT_MAX_CHARS: ${CONTEXT_MAX_CHARS:-12000}
 
@@ -313,6 +315,7 @@ services:
       RERANKER_CANDIDATE_LIMIT: ${RERANKER_CANDIDATE_LIMIT:-10}
       RERANKER_MODEL: ${RERANKER_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
 
+      STORAGE_BACKEND: local
       STORAGE_PATH: /app/storage/documents
 
     restart: unless-stopped

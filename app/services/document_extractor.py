@@ -1,36 +1,46 @@
-from pathlib import Path
 import re
+from pathlib import Path
 
 from docx import Document as DocxDocument
+from fastapi import HTTPException, status
 from pypdf import PdfReader
 
-from fastapi import HTTPException, status
+from app.services.file_storage import (
+    materialize_stored_file,
+)
 
 
-def extract_text(file_path: str) -> str:
-    path = Path(file_path)
+def extract_text(
+    storage_reference: str,
+) -> str:
+    path, cleanup_required = (
+        materialize_stored_file(
+            storage_reference
+        )
+    )
 
-    if not path.exists():
+    try:
+        extension = path.suffix.lower()
+
+        if extension == ".txt":
+            return _extract_txt(path)
+
+        if extension == ".pdf":
+            return _extract_pdf(path)
+
+        if extension == ".docx":
+            return _extract_docx(path)
+
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Stored document file not found",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type: {extension}",
         )
 
-    extension = path.suffix.lower()
-
-    if extension == ".txt":
-        return _extract_txt(path)
-
-    if extension == ".pdf":
-        return _extract_pdf(path)
-
-    if extension == ".docx":
-        return _extract_docx(path)
-
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Unsupported file type: {extension}",
-    )
+    finally:
+        if cleanup_required:
+            path.unlink(
+                missing_ok=True
+            )
 
 
 def _extract_txt(path: Path) -> str:
@@ -41,7 +51,9 @@ def _extract_txt(path: Path) -> str:
 
 
 def _extract_pdf(path: Path) -> str:
-    reader = PdfReader(str(path))
+    reader = PdfReader(
+        str(path)
+    )
 
     pages = []
 
@@ -55,7 +67,9 @@ def _extract_pdf(path: Path) -> str:
 
 
 def _extract_docx(path: Path) -> str:
-    document = DocxDocument(str(path))
+    document = DocxDocument(
+        str(path)
+    )
 
     paragraphs = [
         paragraph.text
@@ -67,7 +81,10 @@ def _extract_docx(path: Path) -> str:
 
 
 def normalize_text(text: str) -> str:
-    text = text.replace("\x00", "")
+    text = text.replace(
+        "\x00",
+        "",
+    )
 
     text = re.sub(
         r"[ \t]+",

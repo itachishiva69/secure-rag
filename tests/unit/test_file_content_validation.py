@@ -8,6 +8,15 @@ from fastapi import HTTPException, UploadFile
 from app.services import file_storage
 
 
+@pytest.fixture(autouse=True)
+def force_local_storage_backend(monkeypatch):
+    monkeypatch.setattr(
+        file_storage.settings,
+        "storage_backend",
+        "local",
+    )
+
+
 def make_upload(
     filename: str,
     content: bytes,

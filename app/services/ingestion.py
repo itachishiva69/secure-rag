@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from sqlalchemy.orm import Session
 
@@ -66,21 +65,12 @@ def ingest_document(
     db.commit()
 
     try:
-        storage_path = Path(
-            document.storage_path
-        )
-
         logger.info(
             "document_storage_check_before_extract",
             extra={
                 "document_id": document_id,
-                "path": str(storage_path),
-                "exists": storage_path.exists(),
-                "is_file": storage_path.is_file(),
-                "size": (
-                    storage_path.stat().st_size
-                    if storage_path.exists()
-                    else None
+                "storage_reference": (
+                    document.storage_path
                 ),
             },
         )
