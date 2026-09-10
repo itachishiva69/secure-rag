@@ -6,6 +6,7 @@ import threading
 
 from qdrant_client import QdrantClient
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 from app.core.config import get_settings
 from app.db.database import SessionLocal, engine
@@ -31,6 +32,7 @@ settings = get_settings()
 INLINE_POLL_SECONDS = 2.0
 HEALTH_CHECK_INTERVAL_SECONDS = 30.0
 INLINE_MAX_JOB_ATTEMPTS = 3
+OUTBOX_LEADERSHIP_LOCK_NAME = "secure-rag-inline-outbox-leader"
 
 
 class RuntimeState:
@@ -120,6 +122,8 @@ class InlineRuntime:
         self._threads: list[
             threading.Thread
         ] = []
+        self._leader_connection: Connection | None = None
+        self._leadership_wait_logged = False
 
     def start(self) -> None:
         logger.info(
@@ -235,30 +239,141 @@ class InlineRuntime:
                     "runtime_health_loop_failed"
                 )
 
-    def _outbox_loop(self) -> None:
-        while not self._stop_event.is_set():
-            did_work = False
-
+    def _acquire_outbox_leadership(self) -> bool:
+        if self._leader_connection is not None:
             try:
-                while True:
-                    processed = (
-                        self._process_one_outbox_event()
-                    )
-
-                    if not processed:
-                        break
-
-                    did_work = True
-
+                self._leader_connection.execute(
+                    text("SELECT 1")
+                )
+                return True
             except Exception:
                 logger.exception(
-                    "inline_outbox_loop_failed"
+                    "inline_outbox_leadership_connection_lost"
+                )
+                self._release_outbox_leadership()
+
+        try:
+            connection = engine.connect()
+
+            acquired = connection.execute(
+                text(
+                    "SELECT pg_try_advisory_lock("
+                    "hashtext(:lock_name)"
+                    ")"
+                ),
+                {
+                    "lock_name": (
+                        OUTBOX_LEADERSHIP_LOCK_NAME
+                    )
+                },
+            ).scalar()
+
+            if acquired:
+                self._leader_connection = connection
+                self._leadership_wait_logged = False
+
+                logger.info(
+                    "inline_outbox_leadership_acquired",
+                    extra={
+                        "lock_name": (
+                            OUTBOX_LEADERSHIP_LOCK_NAME
+                        ),
+                    },
                 )
 
-            if not did_work:
-                self._stop_event.wait(
-                    INLINE_POLL_SECONDS
+                return True
+
+            connection.close()
+
+            if not self._leadership_wait_logged:
+                logger.info(
+                    "inline_outbox_leadership_waiting",
+                    extra={
+                        "lock_name": (
+                            OUTBOX_LEADERSHIP_LOCK_NAME
+                        ),
+                    },
                 )
+                self._leadership_wait_logged = True
+
+            return False
+
+        except Exception:
+            logger.exception(
+                "inline_outbox_leadership_acquire_failed"
+            )
+            return False
+
+    def _release_outbox_leadership(self) -> None:
+        connection = self._leader_connection
+        self._leader_connection = None
+
+        if connection is None:
+            return
+
+        try:
+            connection.execute(
+                text(
+                    "SELECT pg_advisory_unlock("
+                    "hashtext(:lock_name)"
+                    ")"
+                ),
+                {
+                    "lock_name": (
+                        OUTBOX_LEADERSHIP_LOCK_NAME
+                    )
+                },
+            )
+        except Exception:
+            logger.exception(
+                "inline_outbox_leadership_release_failed"
+            )
+        finally:
+            connection.close()
+
+            logger.info(
+                "inline_outbox_leadership_released",
+                extra={
+                    "lock_name": (
+                        OUTBOX_LEADERSHIP_LOCK_NAME
+                    ),
+                },
+            )
+
+    def _outbox_loop(self) -> None:
+        try:
+            while not self._stop_event.is_set():
+                if not self._acquire_outbox_leadership():
+                    self._stop_event.wait(
+                        INLINE_POLL_SECONDS
+                    )
+                    continue
+
+                did_work = False
+
+                try:
+                    while True:
+                        processed = (
+                            self._process_one_outbox_event()
+                        )
+
+                        if not processed:
+                            break
+
+                        did_work = True
+
+                except Exception:
+                    logger.exception(
+                        "inline_outbox_loop_failed"
+                    )
+
+                if not did_work:
+                    self._stop_event.wait(
+                        INLINE_POLL_SECONDS
+                    )
+
+        finally:
+            self._release_outbox_leadership()
 
     def _maintenance_loop(self) -> None:
         self._run_maintenance()
