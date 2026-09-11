@@ -159,13 +159,88 @@ export async function uploadDocument(
   file: File,
   departmentIds: number[],
 ): Promise<Document> {
-  const formData = new FormData();
-  formData.append("file", file, file.name);
-  formData.append("department_ids", departmentIds.join(","));
-
-  return request<Document>("/documents/upload", {
+  const signature = await request<{
+    cloud_name: string;
+    api_key: string;
+    timestamp: number;
+    public_id: string;
+    signature: string;
+  }>("/documents/upload-signature", {
     method: "POST",
-    body: formData,
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      filename: file.name,
+    }),
+  });
+
+  const cloudinaryForm = new FormData();
+  cloudinaryForm.append("file", file, file.name);
+  cloudinaryForm.append("api_key", signature.api_key);
+  cloudinaryForm.append("timestamp", String(signature.timestamp));
+  cloudinaryForm.append("public_id", signature.public_id);
+  cloudinaryForm.append("signature", signature.signature);
+  cloudinaryForm.append("type", "authenticated");
+
+  let uploadResponse: Response;
+
+  try {
+    uploadResponse = await fetch(
+      `https://api.cloudinary.com/v1_1/${encodeURIComponent(
+        signature.cloud_name,
+      )}/raw/upload`,
+      {
+        method: "POST",
+        body: cloudinaryForm,
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? `Cloudinary upload failed: ${error.message}`
+        : "Cloudinary upload failed.",
+    );
+  }
+
+  let body: {
+    public_id?: unknown;
+    error?: { message?: unknown };
+  } = {};
+
+  try {
+    body = (await uploadResponse.json()) as typeof body;
+  } catch {
+    // Keep generic error below.
+  }
+
+  if (!uploadResponse.ok) {
+    throw new ApiError(
+      uploadResponse.status,
+      typeof body.error?.message === "string"
+        ? body.error.message
+        : `Cloudinary upload failed with status ${uploadResponse.status}`,
+    );
+  }
+
+  if (body.public_id !== signature.public_id) {
+    throw new Error("Cloudinary returned an unexpected upload reference.");
+  }
+
+  const completeForm = new URLSearchParams({
+    filename: file.name,
+    department_ids: departmentIds.join(","),
+    public_id: signature.public_id,
+    timestamp: String(signature.timestamp),
+    signature: signature.signature,
+  });
+
+  return request<Document>("/documents/upload-complete", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: completeForm,
   });
 }
 

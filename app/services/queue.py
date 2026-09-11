@@ -69,6 +69,7 @@ def enqueue_ingestion_job(
             max=INGESTION_RETRY_MAX,
             interval=INGESTION_RETRY_INTERVALS,
         ),
+        "job_timeout": 900,
     }
 
     if job_id is not None:

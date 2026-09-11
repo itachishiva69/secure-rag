@@ -1,3 +1,9 @@
+import cloudinary
+import cloudinary.api
+import cloudinary.uploader
+import cloudinary.utils
+from pathlib import Path
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -124,6 +130,207 @@ def build_document_response(
             for department in document.departments
         ],
     )
+
+
+
+@router.post(
+    "/upload-signature",
+)
+def create_cloudinary_upload_signature(
+    filename: str = Form(...),
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(enforce_upload_rate_limit),
+):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+    extension = Path(filename).suffix.lower()
+
+    if extension not in {".pdf", ".txt", ".docx"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type. Allowed: PDF, TXT, DOCX",
+        )
+
+    if not (
+        settings.cloudinary_cloud_name
+        and settings.cloudinary_api_key
+        and settings.cloudinary_api_secret
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Cloudinary configuration is incomplete",
+        )
+
+    import time
+    from uuid import uuid4
+
+    timestamp = int(time.time())
+    public_id = f"documents/{uuid4().hex}{extension}"
+
+    signature = cloudinary.utils.api_sign_request(
+        {
+            "public_id": public_id,
+            "timestamp": timestamp,
+            "type": "authenticated",
+        },
+        settings.cloudinary_api_secret,
+    )
+
+    return {
+        "cloud_name": settings.cloudinary_cloud_name,
+        "api_key": settings.cloudinary_api_key,
+        "timestamp": timestamp,
+        "public_id": public_id,
+        "signature": signature,
+    }
+
+
+@router.post(
+    "/upload-complete",
+    response_model=DocumentResponse,
+)
+def complete_cloudinary_upload(
+    filename: str = Form(...),
+    department_ids: str = Form(...),
+    public_id: str = Form(...),
+    timestamp: int = Form(...),
+    signature: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(enforce_upload_rate_limit),
+):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+    if not (
+        settings.cloudinary_cloud_name
+        and settings.cloudinary_api_key
+        and settings.cloudinary_api_secret
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Cloudinary configuration is incomplete",
+        )
+
+    extension = Path(filename).suffix.lower()
+
+    if extension not in {".pdf", ".txt", ".docx"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type. Allowed: PDF, TXT, DOCX",
+        )
+
+    if not public_id.startswith("documents/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Cloudinary public ID",
+        )
+
+    expected_signature = cloudinary.utils.api_sign_request(
+        {
+            "public_id": public_id,
+            "timestamp": timestamp,
+            "type": "authenticated",
+        },
+        settings.cloudinary_api_secret,
+    )
+
+    if signature != expected_signature:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Cloudinary upload signature",
+        )
+
+    try:
+        parsed_department_ids = [
+            int(value.strip())
+            for value in department_ids.split(",")
+            if value.strip()
+        ]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="department_ids must contain integers",
+        ) from exc
+
+    if not parsed_department_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one department is required",
+        )
+
+    try:
+        cloudinary.api.resource(
+            public_id,
+            resource_type="raw",
+            type="authenticated",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cloudinary upload was not found",
+        ) from exc
+
+    storage_path = f"cloudinary://{public_id}"
+
+    try:
+        document = create_document(
+            db=db,
+            current_user=current_user,
+            data=DocumentCreate(
+                filename=filename,
+                storage_path=storage_path,
+                department_ids=parsed_department_ids,
+            ),
+        )
+
+        create_ingestion_outbox_event(
+            db=db,
+            document_id=document.id,
+        )
+
+        record_audit_event(
+            db,
+            user=current_user,
+            action="document_upload",
+            resource_type="document",
+            resource_id=document.id,
+            department_id=(
+                parsed_department_ids[0]
+                if len(parsed_department_ids) == 1
+                else None
+            ),
+            success=True,
+        )
+
+        db.commit()
+
+    except Exception as exc:
+        db.rollback()
+
+        try:
+            cloudinary.uploader.destroy(
+                public_id,
+                resource_type="raw",
+                type="authenticated",
+                invalidate=True,
+            )
+        except Exception:
+            pass
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create document",
+        ) from exc
+
+    return build_document_response(document)
 
 
 @router.post(
