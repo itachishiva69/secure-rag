@@ -22,7 +22,7 @@ import {
 import { getAccessToken } from "../../lib/auth";
 import type { Department, Document, User } from "../../lib/types";
 
-const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = [".pdf", ".txt", ".docx"] as const;
 
 function formatDate(value: string): string {
